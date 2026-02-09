@@ -118,8 +118,19 @@ export function EventExplorerView({ onAuthError }: Props) {
   // ── Acknowledge panel ──────────────────────────────────
   const [showAckPanel, setShowAckPanel] = useState(false);
   const [ackSystem, setAckSystem] = useState('');
-  const [ackFrom, setAckFrom] = useState('');
-  const [ackTo, setAckTo] = useState('');
+  const [ackFrom, setAckFrom] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-01-01T00:00`;
+  });
+  const [ackTo, setAckTo] = useState(() => {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    const h = String(d.getHours()).padStart(2, '0');
+    const min = String(d.getMinutes()).padStart(2, '0');
+    return `${y}-${m}-${day}T${h}:${min}`;
+  });
   const [acking, setAcking] = useState(false);
   const [ackMsg, setAckMsg] = useState('');
   const [ackError, setAckError] = useState('');
@@ -282,10 +293,13 @@ export function EventExplorerView({ onAuthError }: Props) {
     return sortDir === 'desc' ? ' \u2193' : ' \u2191';
   };
 
+  /** Format datetime-local value (YYYY-MM-DDTHH:MM) into EU display. */
+  const fmtAckDate = (v: string) => v ? formatEuDate(new Date(v).toISOString()) : 'now';
+
   const handleAcknowledge = async () => {
     const rangeDesc = ackFrom
-      ? `from ${ackFrom} to ${ackTo || 'now'}`
-      : `up to ${ackTo || 'now'}`;
+      ? `from ${fmtAckDate(ackFrom)} to ${fmtAckDate(ackTo)}`
+      : `up to ${fmtAckDate(ackTo)}`;
     const systemDesc = ackSystem
       ? facets?.systems.find((s) => s.id === ackSystem)?.name ?? ackSystem
       : 'ALL systems';
@@ -316,8 +330,8 @@ export function EventExplorerView({ onAuthError }: Props) {
 
   const handleUnacknowledge = async () => {
     const rangeDesc = ackFrom
-      ? `from ${ackFrom} to ${ackTo || 'now'}`
-      : `up to ${ackTo || 'now'}`;
+      ? `from ${fmtAckDate(ackFrom)} to ${fmtAckDate(ackTo)}`
+      : `up to ${fmtAckDate(ackTo)}`;
     const systemDesc = ackSystem
       ? facets?.systems.find((s) => s.id === ackSystem)?.name ?? ackSystem
       : 'ALL systems';

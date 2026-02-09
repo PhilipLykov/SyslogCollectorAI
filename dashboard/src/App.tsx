@@ -220,6 +220,7 @@ export default function App() {
                 key={s.id}
                 system={s}
                 onClick={() => setSelectedSystem(s)}
+                onAuthError={handleLogout}
               />
             ))}
           </div>

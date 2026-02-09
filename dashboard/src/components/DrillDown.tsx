@@ -484,10 +484,21 @@ export function DrillDown({ system, onBack, onAuthError }: DrillDownProps) {
   );
 }
 
-/** Safely format a date, falling back to the raw string if invalid. */
+/** Safely format a date as DD.MM.YYYY HH:MM:SS (EU format). */
 function safeDate(ts: string): string {
-  const d = new Date(ts);
-  return isNaN(d.getTime()) ? ts : d.toLocaleString();
+  try {
+    const d = new Date(ts);
+    if (isNaN(d.getTime())) return ts;
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = d.getFullYear();
+    const hours = String(d.getHours()).padStart(2, '0');
+    const minutes = String(d.getMinutes()).padStart(2, '0');
+    const seconds = String(d.getSeconds()).padStart(2, '0');
+    return `${day}.${month}.${year} ${hours}:${minutes}:${seconds}`;
+  } catch {
+    return ts;
+  }
 }
 
 /** Score colour matching ScoreBar's logic. */

@@ -248,6 +248,24 @@ input:focus-visible,
   font-size: 0.85rem;
 }
 
+.sc-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.sc-ack-msg {
+  margin-top: 6px;
+  font-size: 0.8rem;
+  color: var(--accent);
+  word-break: break-word;
+}
+
+.sc-ack-error {
+  color: #e53e3e;
+}
+
 /* ── Score bars ─────────────────────────────────────────── */
 
 .score-bars {
