@@ -78,14 +78,16 @@ export default function App() {
     setAuthenticated(true);
   };
 
-  const handleLogout = () => {
+  // Memoized so child views using onAuthError in useCallback deps
+  // don't needlessly re-fetch when App re-renders (e.g. from auto-refresh).
+  const handleLogout = useCallback(() => {
     setApiKey('');
     setAuthenticated(false);
     setSystems([]);
     setSelectedSystem(null);
     setLastRefreshed(null);
     setView('dashboard');
-  };
+  }, []);
 
   if (!authenticated) {
     return <LoginForm onLogin={handleLogin} />;

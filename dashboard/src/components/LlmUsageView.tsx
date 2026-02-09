@@ -8,7 +8,7 @@ interface LlmUsageViewProps {
 type DateRange = '24h' | '7d' | '30d' | 'all';
 
 function formatCost(cost: number | null): string {
-  if (cost === null || cost === undefined) return '—';
+  if (cost === null || cost === undefined || !Number.isFinite(cost)) return '—';
   if (cost < 0.000001) return '$0.00';
   if (cost < 0.01) return `$${cost.toFixed(6)}`;
   if (cost < 1) return `$${cost.toFixed(4)}`;
@@ -16,7 +16,7 @@ function formatCost(cost: number | null): string {
 }
 
 function formatTokens(count: number | null): string {
-  if (count === null || count === undefined) return '—';
+  if (count === null || count === undefined || !Number.isFinite(count)) return '—';
   if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(2)}M`;
   if (count >= 1_000) return `${(count / 1_000).toFixed(1)}K`;
   return String(count);
@@ -25,6 +25,8 @@ function formatTokens(count: number | null): string {
 function formatDateTime(iso: string): string {
   try {
     const d = new Date(iso);
+    // new Date('garbage') returns Invalid Date (NaN), doesn't throw
+    if (isNaN(d.getTime())) return iso;
     return d.toLocaleString('en-GB', {
       timeZone: 'Europe/Chisinau',
       year: 'numeric',

@@ -205,19 +205,24 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
       if (request.query.to) totalsQuery = totalsQuery.where('created_at', '<=', request.query.to);
       if (request.query.system_id) totalsQuery = totalsQuery.where({ system_id: request.query.system_id });
 
-      const totals = await totalsQuery
+      const rawTotals = await totalsQuery
         .sum('token_input as total_input')
         .sum('token_output as total_output')
         .sum('request_count as total_requests')
         .first();
 
-      const totalInput = Number(totals?.total_input ?? 0);
-      const totalOutput = Number(totals?.total_output ?? 0);
+      // PostgreSQL SUM returns bigint → pg driver serializes as string.
+      // Normalize to numbers for a consistent JSON response contract.
+      const totalInput = Number(rawTotals?.total_input ?? 0);
+      const totalOutput = Number(rawTotals?.total_output ?? 0);
+      const totalRequests = Number(rawTotals?.total_requests ?? 0);
 
       return reply.send({
         records: enrichedRecords,
         totals: {
-          ...totals,
+          total_input: totalInput,
+          total_output: totalOutput,
+          total_requests: totalRequests,
           total_cost: estimateCost(totalInput, totalOutput, model),
         },
         model,
