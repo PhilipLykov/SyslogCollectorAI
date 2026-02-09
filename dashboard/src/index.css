@@ -359,6 +359,26 @@ input:focus-visible,
   margin-bottom: 8px;
 }
 
+.dd-ack-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.bulk-ack-msg {
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  background: rgba(99, 102, 241, 0.1);
+  color: var(--accent);
+  margin-bottom: 12px;
+}
+
+.bulk-ack-error {
+  background: rgba(229, 62, 62, 0.1);
+  color: #e53e3e;
+}
+
 /* ── Clickable score rows ── */
 .score-row.clickable {
   border-radius: var(--radius);

@@ -12,6 +12,7 @@ import {
   fetchFindings,
   acknowledgeFinding,
   reopenFinding,
+  acknowledgeEvents,
 } from '../api';
 import { ScoreBars, CRITERIA_LABELS } from './ScoreBar';
 import { AskAiPanel } from './AskAiPanel';
@@ -184,6 +185,60 @@ export function DrillDown({ system, onBack, onAuthError }: DrillDownProps) {
     }
   }, []);
 
+  // ── Bulk ack: all open findings ─────────────────────────
+  const [bulkAcking, setBulkAcking] = useState(false);
+  const [bulkAckMsg, setBulkAckMsg] = useState('');
+
+  const handleAckAllFindings = useCallback(async () => {
+    const open = findings.filter((f) => f.status === 'open');
+    if (open.length === 0) return;
+    if (!window.confirm(
+      `Acknowledge ALL ${open.length} open finding${open.length !== 1 ? 's' : ''} for "${system.name}"?`,
+    )) return;
+
+    setBulkAcking(true);
+    setBulkAckMsg('');
+    try {
+      let acked = 0;
+      for (const f of open) {
+        const updated = await acknowledgeFinding(f.id);
+        setFindings((prev) => prev.map((x) => (x.id === f.id ? updated : x)));
+        acked++;
+      }
+      setBulkAckMsg(`${acked} finding${acked !== 1 ? 's' : ''} acknowledged.`);
+      setTimeout(() => setBulkAckMsg(''), 4000);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('Authentication')) { onAuthErrorRef.current(); return; }
+      setBulkAckMsg(`Error: ${msg}`);
+      setTimeout(() => setBulkAckMsg(''), 5000);
+    } finally {
+      setBulkAcking(false);
+    }
+  }, [findings, system.name]);
+
+  // ── Bulk ack: all events ──────────────────────────────
+  const handleAckAllEvents = useCallback(async () => {
+    if (!window.confirm(
+      `Acknowledge ALL events for "${system.name}" up to now?\n\nAcknowledged events will be excluded from future LLM scoring.`,
+    )) return;
+
+    setBulkAcking(true);
+    setBulkAckMsg('');
+    try {
+      const res = await acknowledgeEvents({ system_id: system.id });
+      setBulkAckMsg(res.message);
+      setTimeout(() => setBulkAckMsg(''), 4000);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('Authentication')) { onAuthErrorRef.current(); return; }
+      setBulkAckMsg(`Error: ${msg}`);
+      setTimeout(() => setBulkAckMsg(''), 5000);
+    } finally {
+      setBulkAcking(false);
+    }
+  }, [system.id, system.name]);
+
   // ── Compute filtered findings ───────────────────────────
   const openFindings = findings.filter((f) => f.status === 'open');
   const ackedFindings = findings.filter((f) => f.status === 'acknowledged');
@@ -326,6 +381,25 @@ export function DrillDown({ system, onBack, onAuthError }: DrillDownProps) {
         onAuthError={onAuthError}
       />
 
+      {/* ── Bulk ack status message ── */}
+      {bulkAckMsg && (
+        <div className={`bulk-ack-msg${bulkAckMsg.startsWith('Error') ? ' bulk-ack-error' : ''}`}>
+          {bulkAckMsg}
+        </div>
+      )}
+
+      {/* ── Ack All Events button ── */}
+      <div className="dd-ack-actions">
+        <button
+          className="btn btn-sm btn-outline"
+          onClick={handleAckAllEvents}
+          disabled={bulkAcking}
+          title="Acknowledge all events for this system up to now"
+        >
+          {bulkAcking ? '...' : 'Ack All Events'}
+        </button>
+      </div>
+
       {/* ── Persistent Findings panel ── */}
       {!loading && (
         <div className="findings-panel">
@@ -351,6 +425,16 @@ export function DrillDown({ system, onBack, onAuthError }: DrillDownProps) {
                 Resolved{resolvedFindings.length > 0 && <span className="findings-tab-count">{resolvedFindings.length}</span>}
               </button>
             </div>
+            {openFindings.length > 0 && (
+              <button
+                className="btn btn-xs btn-ack"
+                onClick={handleAckAllFindings}
+                disabled={bulkAcking || ackingId !== null}
+                title="Acknowledge all open findings"
+              >
+                {bulkAcking ? '...' : 'Ack All'}
+              </button>
+            )}
             <button className="btn btn-xs btn-outline" onClick={loadFindings} title="Refresh findings">
               ↻ Refresh
             </button>

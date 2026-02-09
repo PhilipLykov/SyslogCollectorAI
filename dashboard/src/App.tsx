@@ -101,6 +101,7 @@ export default function App() {
   };
 
   const switchToDashboard = () => {
+    setSelectedSystem(null);
     setView('dashboard');
     loadSystems(true);
   };
