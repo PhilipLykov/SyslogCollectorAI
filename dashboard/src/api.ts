@@ -102,6 +102,7 @@ export interface LogEvent {
   span_id?: string;
   external_id?: string;
   raw?: Record<string, unknown> | string;
+  acknowledged_at?: string | null;
 }
 
 export interface MetaResult {
@@ -634,6 +635,53 @@ export async function traceEvents(params: {
   if (params.window_hours) qs.set('window_hours', String(params.window_hours));
   if (params.limit) qs.set('limit', String(params.limit));
   return apiFetch(`/api/v1/events/trace?${qs}`);
+}
+
+// ── Event Acknowledgement ────────────────────────────────────
+
+export interface AckEventsParams {
+  system_id?: string;
+  from?: string;
+  to?: string;
+}
+
+export interface AckEventsResponse {
+  acknowledged: number;
+  message: string;
+}
+
+export async function acknowledgeEvents(params: AckEventsParams): Promise<AckEventsResponse> {
+  return apiFetch('/api/v1/events/acknowledge', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+export async function unacknowledgeEvents(params: AckEventsParams): Promise<{ unacknowledged: number; message: string }> {
+  return apiFetch('/api/v1/events/unacknowledge', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+export interface AckConfigResponse {
+  mode: 'skip' | 'context_only';
+  prompt: string;
+  default_prompt: string;
+}
+
+export async function fetchAckConfig(): Promise<AckConfigResponse> {
+  return apiFetch('/api/v1/events/ack-config');
+}
+
+export async function updateAckConfig(data: {
+  mode?: 'skip' | 'context_only';
+  prompt?: string;
+}): Promise<AckConfigResponse> {
+  return apiFetch('/api/v1/events/ack-config', {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
 }
 
 /**

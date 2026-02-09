@@ -44,14 +44,36 @@ export async function metaAnalyzeWindow(
   // Resolve custom system prompt (if configured by user)
   const customPrompts = await resolveCustomPrompts(db);
 
+  // ── Resolve event ack config ────────────────────────────
+  const ackRows = await db('app_config')
+    .whereIn('key', ['event_ack_mode', 'event_ack_prompt'])
+    .select('key', 'value');
+  const ackCfg: Record<string, string> = {};
+  for (const row of ackRows) {
+    let v = row.value;
+    if (typeof v === 'string') { try { v = JSON.parse(v); } catch { /* ok */ } }
+    if (typeof v === 'string') ackCfg[row.key] = v;
+  }
+  const ackMode = ackCfg['event_ack_mode'] || 'context_only';
+  const ackPrompt = ackCfg['event_ack_prompt'] ||
+    'Previously acknowledged by user — use only for pattern recognition context. ' +
+    'Do not score, do not raise new findings for these events.';
+
   // ── Gather events in window ─────────────────────────────
-  const events = await db('events')
+  let eventQuery = db('events')
     .where({ system_id: system.id })
     .where('timestamp', '>=', window.from_ts)
     .where('timestamp', '<', window.to_ts)
-    .select('id', 'message', 'severity', 'template_id')
+    .select('id', 'message', 'severity', 'template_id', 'acknowledged_at')
     .orderBy('timestamp', 'asc')
     .limit(200); // Cap for LLM context
+
+  // In "skip" mode, exclude acknowledged events entirely
+  if (ackMode === 'skip') {
+    eventQuery = eventQuery.whereNull('acknowledged_at');
+  }
+
+  const events = await eventQuery;
 
   if (events.length === 0) {
     console.log(`[${localTimestamp()}] Meta-analyze: no events in window ${windowId}`);
@@ -85,7 +107,10 @@ export async function metaAnalyzeWindow(
   }
 
   // Deduplicate by template for LLM input
-  const templateGroups = new Map<string, { message: string; severity?: string; count: number; scores?: ScoreResult }>();
+  const templateGroups = new Map<string, {
+    message: string; severity?: string; count: number;
+    scores?: ScoreResult; acknowledged: boolean;
+  }>();
   for (const event of events) {
     const key = event.template_id ?? event.id;
     if (!templateGroups.has(key)) {
@@ -94,17 +119,29 @@ export async function metaAnalyzeWindow(
         severity: event.severity,
         count: 0,
         scores: scoreMap.get(event.id),
+        acknowledged: !!event.acknowledged_at,
       });
     }
     templateGroups.get(key)!.count++;
   }
 
-  const eventsForLlm = Array.from(templateGroups.values()).map((g) => ({
-    message: g.message,
-    severity: g.severity,
-    scores: g.scores,
-    occurrenceCount: g.count,
-  }));
+  const eventsForLlm = Array.from(templateGroups.values()).map((g) => {
+    // In context_only mode, annotate acknowledged events with the ack prompt
+    if (g.acknowledged && ackMode === 'context_only') {
+      return {
+        message: `[ACK] ${g.message} — ${ackPrompt}`,
+        severity: g.severity,
+        scores: g.scores,
+        occurrenceCount: g.count,
+      };
+    }
+    return {
+      message: g.message,
+      severity: g.severity,
+      scores: g.scores,
+      occurrenceCount: g.count,
+    };
+  });
 
   // ── Build historical context (sliding window) ───────────
   const context = await buildMetaContext(db, system.id, windowId);

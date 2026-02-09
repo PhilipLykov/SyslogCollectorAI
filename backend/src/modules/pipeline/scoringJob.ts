@@ -31,9 +31,11 @@ export async function runPerEventScoringJob(
   const customPrompts = await resolveCustomPrompts(db);
 
   // 1. Fetch unscored events (events without any event_scores entry)
+  //    Skip acknowledged events — they are excluded from LLM scoring entirely.
   let query = db('events')
     .leftJoin('event_scores', 'events.id', 'event_scores.event_id')
     .whereNull('event_scores.id')
+    .whereNull('events.acknowledged_at')
     .select('events.id', 'events.system_id', 'events.message', 'events.severity',
             'events.host', 'events.program', 'events.log_source_id')
     .limit(limit);

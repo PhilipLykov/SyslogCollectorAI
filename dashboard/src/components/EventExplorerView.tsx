@@ -6,6 +6,8 @@ import {
   type EventFacets,
   searchEvents,
   fetchEventFacets,
+  acknowledgeEvents,
+  unacknowledgeEvents,
 } from '../api';
 import { TracePanel } from './TracePanel';
 
@@ -112,6 +114,15 @@ export function EventExplorerView({ onAuthError }: Props) {
   // ── Trace panel ──────────────────────────────────────────
   const [traceValue, setTraceValue] = useState<string | null>(null);
   const [traceAnchorTime, setTraceAnchorTime] = useState<string | undefined>(undefined);
+
+  // ── Acknowledge panel ──────────────────────────────────
+  const [showAckPanel, setShowAckPanel] = useState(false);
+  const [ackSystem, setAckSystem] = useState('');
+  const [ackFrom, setAckFrom] = useState('');
+  const [ackTo, setAckTo] = useState('');
+  const [acking, setAcking] = useState(false);
+  const [ackMsg, setAckMsg] = useState('');
+  const [ackError, setAckError] = useState('');
 
   const searchInputRef = useRef<HTMLInputElement>(null);
   const initialLoadDone = useRef(false);
@@ -271,6 +282,70 @@ export function EventExplorerView({ onAuthError }: Props) {
     return sortDir === 'desc' ? ' \u2193' : ' \u2191';
   };
 
+  const handleAcknowledge = async () => {
+    const rangeDesc = ackFrom
+      ? `from ${ackFrom} to ${ackTo || 'now'}`
+      : `up to ${ackTo || 'now'}`;
+    const systemDesc = ackSystem
+      ? facets?.systems.find((s) => s.id === ackSystem)?.name ?? ackSystem
+      : 'ALL systems';
+    if (!window.confirm(
+      `Acknowledge all events for ${systemDesc} (${rangeDesc})?\n\n` +
+      'Acknowledged events will be excluded from future LLM scoring.',
+    )) return;
+
+    setAcking(true);
+    setAckMsg('');
+    setAckError('');
+    try {
+      const params: { system_id?: string; from?: string; to?: string } = {};
+      if (ackSystem) params.system_id = ackSystem;
+      if (ackFrom) params.from = new Date(ackFrom).toISOString();
+      if (ackTo) params.to = new Date(ackTo).toISOString();
+      const res = await acknowledgeEvents(params);
+      setAckMsg(res.message);
+      if (hasSearched) doSearch(page);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('Authentication')) { onAuthError(); return; }
+      setAckError(msg);
+    } finally {
+      setAcking(false);
+    }
+  };
+
+  const handleUnacknowledge = async () => {
+    const rangeDesc = ackFrom
+      ? `from ${ackFrom} to ${ackTo || 'now'}`
+      : `up to ${ackTo || 'now'}`;
+    const systemDesc = ackSystem
+      ? facets?.systems.find((s) => s.id === ackSystem)?.name ?? ackSystem
+      : 'ALL systems';
+    if (!window.confirm(
+      `Un-acknowledge events for ${systemDesc} (${rangeDesc})?\n\n` +
+      'These events will be picked up for LLM scoring on the next pipeline run.',
+    )) return;
+
+    setAcking(true);
+    setAckMsg('');
+    setAckError('');
+    try {
+      const params: { system_id?: string; from?: string; to?: string } = {};
+      if (ackSystem) params.system_id = ackSystem;
+      if (ackFrom) params.from = new Date(ackFrom).toISOString();
+      if (ackTo) params.to = new Date(ackTo).toISOString();
+      const res = await unacknowledgeEvents(params);
+      setAckMsg(res.message);
+      if (hasSearched) doSearch(page);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('Authentication')) { onAuthError(); return; }
+      setAckError(msg);
+    } finally {
+      setAcking(false);
+    }
+  };
+
   const totalPages = result ? Math.ceil(result.total / result.limit) : 0;
 
   /** Render message with optional keyword highlighting. */
@@ -317,8 +392,73 @@ export function EventExplorerView({ onAuthError }: Props) {
           <button className="btn btn-sm btn-outline" onClick={clearFilters} title="Clear all filters">
             Clear
           </button>
+          <button
+            className={`btn btn-sm ${showAckPanel ? 'btn-accent' : 'btn-outline'}`}
+            onClick={() => setShowAckPanel((p) => !p)}
+            title="Acknowledge events"
+          >
+            Acknowledge
+          </button>
         </div>
       </div>
+
+      {/* ── Acknowledge panel ────────────────────────────── */}
+      {showAckPanel && (
+        <div className="ee-ack-panel">
+          <div className="ee-ack-header">
+            <strong>Acknowledge Events</strong>
+            <span className="ee-ack-hint">
+              Acknowledged events are excluded from LLM scoring. Configure behaviour in Settings &gt; AI Model.
+            </span>
+          </div>
+          <div className="ee-ack-controls">
+            <div className="ee-filter-group">
+              <label>System</label>
+              <select value={ackSystem} onChange={(e) => setAckSystem(e.target.value)}>
+                <option value="">All systems</option>
+                {facets?.systems.map((s) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            </div>
+            <div className="ee-filter-group">
+              <label>From</label>
+              <input
+                type="datetime-local"
+                value={ackFrom}
+                onChange={(e) => setAckFrom(e.target.value)}
+                placeholder="Beginning"
+              />
+            </div>
+            <div className="ee-filter-group">
+              <label>To (default: now)</label>
+              <input
+                type="datetime-local"
+                value={ackTo}
+                onChange={(e) => setAckTo(e.target.value)}
+              />
+            </div>
+            <div className="ee-ack-buttons">
+              <button
+                className="btn btn-sm btn-accent"
+                onClick={handleAcknowledge}
+                disabled={acking}
+              >
+                {acking ? 'Processing...' : 'Acknowledge'}
+              </button>
+              <button
+                className="btn btn-sm btn-outline"
+                onClick={handleUnacknowledge}
+                disabled={acking}
+              >
+                Un-acknowledge
+              </button>
+            </div>
+          </div>
+          {ackMsg && <div className="success-msg" role="status">{ackMsg}</div>}
+          {ackError && <div className="error-msg" role="alert">{ackError}</div>}
+        </div>
+      )}
 
       {/* ── Filters ──────────────────────────────────────── */}
       {filtersExpanded && (
@@ -424,7 +564,7 @@ export function EventExplorerView({ onAuthError }: Props) {
                 <Fragment key={e.id}>
                   {/* Main row */}
                   <tr
-                    className={`event-row ${expandedRow === e.id ? 'expanded' : ''}`}
+                    className={`event-row ${expandedRow === e.id ? 'expanded' : ''}${e.acknowledged_at ? ' event-row-acked' : ''}`}
                     onClick={() => toggleRow(e.id)}
                     tabIndex={0}
                     onKeyDown={(ev) => {
@@ -437,6 +577,9 @@ export function EventExplorerView({ onAuthError }: Props) {
                   >
                     <td style={{ whiteSpace: 'nowrap' }}>
                       {formatEuDate(e.timestamp)}
+                      {e.acknowledged_at && (
+                        <span className="ee-ack-badge" title={`Acknowledged at ${formatEuDate(e.acknowledged_at)}`}>ACK</span>
+                      )}
                     </td>
                     <td>
                       <span className="ee-system-tag">{e.system_name ?? '\u2014'}</span>

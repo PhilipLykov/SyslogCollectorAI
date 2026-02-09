@@ -2788,6 +2788,74 @@ input:focus-visible,
   border-radius: 2px;
 }
 
+/* ── Acknowledge panel ─────────────────────────────────── */
+
+.ee-ack-panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-bottom: 12px;
+}
+
+.ee-ack-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.ee-ack-header strong {
+  font-size: 0.95rem;
+}
+
+.ee-ack-hint {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.ee-ack-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+}
+
+.ee-ack-controls .ee-filter-group {
+  min-width: 0;
+}
+
+.ee-ack-buttons {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  padding-bottom: 2px;
+}
+
+.ee-ack-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  background: rgba(250, 204, 21, 0.18);
+  color: var(--yellow);
+  vertical-align: middle;
+  letter-spacing: 0.5px;
+}
+
+/* Dim acknowledged rows slightly */
+tr.event-row-acked {
+  opacity: 0.6;
+}
+
+tr.event-row-acked:hover {
+  opacity: 0.85;
+}
+
 /* ── Trace panel overlay ───────────────────────────────── */
 
 .trace-overlay {

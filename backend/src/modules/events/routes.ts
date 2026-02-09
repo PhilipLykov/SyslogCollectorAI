@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { getDb } from '../../db/index.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { localTimestamp } from '../../config/index.js';
+import { invalidateAiConfigCache } from '../llm/aiConfig.js';
 
 /** Allowed sort columns — prevents SQL injection via sort_by param. */
 const ALLOWED_SORT_COLUMNS = new Set([
@@ -161,6 +162,7 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
             'events.span_id',
             'events.external_id',
             'events.raw',
+            'events.acknowledged_at',
           )
           .orderBy(`events.${sortColumn}`, sortDirection)
           // Secondary sort for deterministic ordering when primary sort has ties
@@ -361,6 +363,226 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
         app.log.error(`[${localTimestamp()}] Event trace error: ${err.message}`);
         return reply.code(500).send({ error: 'Trace query failed.' });
       }
+    },
+  );
+
+  // ── Acknowledge events (bulk) ─────────────────────────────
+
+  /**
+   * POST /api/v1/events/acknowledge
+   *
+   * Bulk-acknowledge events in a time range (optionally filtered by system).
+   * Acknowledged events are skipped by the LLM scoring job.
+   */
+  app.post(
+    '/api/v1/events/acknowledge',
+    { preHandler: requireAuth('admin') },
+    async (request, reply) => {
+      const body = request.body as any ?? {};
+      const { system_id, from, to } = body;
+
+      // "to" defaults to now
+      const toTs = to ? new Date(to).toISOString() : new Date().toISOString();
+      const fromTs = from ? new Date(from).toISOString() : null;
+
+      // Validate dates
+      if (from && isNaN(Date.parse(from))) {
+        return reply.code(400).send({ error: '"from" must be a valid ISO date string.' });
+      }
+      if (to && isNaN(Date.parse(to))) {
+        return reply.code(400).send({ error: '"to" must be a valid ISO date string.' });
+      }
+
+      try {
+        let query = db('events')
+          .whereNull('acknowledged_at')
+          .where('timestamp', '<=', toTs);
+
+        if (fromTs) {
+          query = query.where('timestamp', '>=', fromTs);
+        }
+
+        if (system_id) {
+          query = query.where('system_id', system_id);
+        }
+
+        // Count first
+        const countResult = await query.clone().count('id as cnt').first();
+        const count = Number(countResult?.cnt ?? 0);
+
+        if (count === 0) {
+          return reply.send({ acknowledged: 0, message: 'No events to acknowledge in the given range.' });
+        }
+
+        // Batch update to avoid locking the entire table for too long
+        const BATCH_SIZE = 5000;
+        let totalAcked = 0;
+        const ackTs = new Date().toISOString();
+
+        while (totalAcked < count) {
+          // Get a batch of IDs to update
+          let batchQuery = db('events')
+            .whereNull('acknowledged_at')
+            .where('timestamp', '<=', toTs);
+          if (fromTs) batchQuery = batchQuery.where('timestamp', '>=', fromTs);
+          if (system_id) batchQuery = batchQuery.where('system_id', system_id);
+
+          const ids = await batchQuery.select('id').limit(BATCH_SIZE);
+          if (ids.length === 0) break;
+
+          await db('events')
+            .whereIn('id', ids.map((r: any) => r.id))
+            .update({ acknowledged_at: ackTs });
+
+          totalAcked += ids.length;
+        }
+
+        app.log.info(
+          `[${localTimestamp()}] Bulk event acknowledgement: ${totalAcked} events` +
+          `${system_id ? ` (system=${system_id})` : ''}, range=${fromTs ?? 'beginning'}..${toTs}`,
+        );
+
+        return reply.send({
+          acknowledged: totalAcked,
+          message: `${totalAcked} event${totalAcked !== 1 ? 's' : ''} acknowledged.`,
+        });
+      } catch (err: any) {
+        app.log.error(`[${localTimestamp()}] Event acknowledge error: ${err.message}`);
+        return reply.code(500).send({ error: 'Event acknowledgement failed.' });
+      }
+    },
+  );
+
+  /**
+   * POST /api/v1/events/unacknowledge
+   *
+   * Bulk-unacknowledge events (undo), same filters as acknowledge.
+   */
+  app.post(
+    '/api/v1/events/unacknowledge',
+    { preHandler: requireAuth('admin') },
+    async (request, reply) => {
+      const body = request.body as any ?? {};
+      const { system_id, from, to } = body;
+
+      const toTs = to ? new Date(to).toISOString() : new Date().toISOString();
+      const fromTs = from ? new Date(from).toISOString() : null;
+
+      if (from && isNaN(Date.parse(from))) {
+        return reply.code(400).send({ error: '"from" must be a valid ISO date string.' });
+      }
+      if (to && isNaN(Date.parse(to))) {
+        return reply.code(400).send({ error: '"to" must be a valid ISO date string.' });
+      }
+
+      try {
+        let query = db('events')
+          .whereNotNull('acknowledged_at')
+          .where('timestamp', '<=', toTs);
+        if (fromTs) query = query.where('timestamp', '>=', fromTs);
+        if (system_id) query = query.where('system_id', system_id);
+
+        const result = await query.update({ acknowledged_at: null });
+
+        app.log.info(`[${localTimestamp()}] Bulk event un-acknowledge: ${result} events`);
+        return reply.send({
+          unacknowledged: result,
+          message: `${result} event${result !== 1 ? 's' : ''} un-acknowledged.`,
+        });
+      } catch (err: any) {
+        app.log.error(`[${localTimestamp()}] Event un-acknowledge error: ${err.message}`);
+        return reply.code(500).send({ error: 'Event un-acknowledgement failed.' });
+      }
+    },
+  );
+
+  // ── Acknowledge config (mode + prompt) ─────────────────────
+
+  /** Default ack prompt for context_only mode. */
+  const DEFAULT_ACK_PROMPT =
+    'Previously acknowledged by user — use only for pattern recognition context. ' +
+    'Do not score, do not raise new findings for these events.';
+
+  app.get(
+    '/api/v1/events/ack-config',
+    { preHandler: requireAuth('admin') },
+    async (_req, reply) => {
+      const rows = await db('app_config')
+        .whereIn('key', ['event_ack_mode', 'event_ack_prompt'])
+        .select('key', 'value');
+
+      const vals: Record<string, string> = {};
+      for (const row of rows) {
+        let v = row.value;
+        if (typeof v === 'string') {
+          try { v = JSON.parse(v); } catch { /* use as-is */ }
+        }
+        if (typeof v === 'string') vals[row.key] = v;
+      }
+
+      return reply.send({
+        mode: vals['event_ack_mode'] || 'context_only',
+        prompt: vals['event_ack_prompt'] || DEFAULT_ACK_PROMPT,
+        default_prompt: DEFAULT_ACK_PROMPT,
+      });
+    },
+  );
+
+  app.put(
+    '/api/v1/events/ack-config',
+    { preHandler: requireAuth('admin') },
+    async (request, reply) => {
+      const body = request.body as any ?? {};
+      const { mode, prompt } = body;
+
+      if (mode !== undefined) {
+        if (!['skip', 'context_only'].includes(mode)) {
+          return reply.code(400).send({ error: 'mode must be "skip" or "context_only".' });
+        }
+        await db.raw(`
+          INSERT INTO app_config (key, value) VALUES (?, ?::jsonb)
+          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        `, ['event_ack_mode', JSON.stringify(mode)]);
+      }
+
+      if (prompt !== undefined) {
+        if (typeof prompt !== 'string') {
+          return reply.code(400).send({ error: 'prompt must be a string.' });
+        }
+        if (prompt.length > 2000) {
+          return reply.code(400).send({ error: 'prompt must be 2000 characters or fewer.' });
+        }
+        if (!prompt.trim()) {
+          // Reset to default
+          await db('app_config').where({ key: 'event_ack_prompt' }).del();
+        } else {
+          await db.raw(`
+            INSERT INTO app_config (key, value) VALUES (?, ?::jsonb)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+          `, ['event_ack_prompt', JSON.stringify(prompt)]);
+        }
+      }
+
+      invalidateAiConfigCache();
+
+      // Return current state
+      const rows = await db('app_config')
+        .whereIn('key', ['event_ack_mode', 'event_ack_prompt'])
+        .select('key', 'value');
+      const vals: Record<string, string> = {};
+      for (const row of rows) {
+        let v = row.value;
+        if (typeof v === 'string') {
+          try { v = JSON.parse(v); } catch { /* use as-is */ }
+        }
+        if (typeof v === 'string') vals[row.key] = v;
+      }
+
+      return reply.send({
+        mode: vals['event_ack_mode'] || 'context_only',
+        prompt: vals['event_ack_prompt'] || DEFAULT_ACK_PROMPT,
+        default_prompt: DEFAULT_ACK_PROMPT,
+      });
     },
   );
 }

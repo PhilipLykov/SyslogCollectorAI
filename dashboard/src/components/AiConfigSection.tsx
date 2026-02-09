@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import {
   type AiConfigResponse, fetchAiConfig, updateAiConfig,
   type AiPromptsResponse, fetchAiPrompts, updateAiPrompts,
+  type AckConfigResponse, fetchAckConfig, updateAckConfig,
 } from '../api';
 
 interface AiConfigSectionProps {
@@ -36,11 +37,24 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
   const [promptSuccess, setPromptSuccess] = useState('');
   const [promptError, setPromptError] = useState('');
 
+  // Ack config state
+  const [ackConfig, setAckConfig] = useState<AckConfigResponse | null>(null);
+  const [ackMode, setAckMode] = useState<'skip' | 'context_only'>('context_only');
+  const [ackPrompt, setAckPrompt] = useState('');
+  const [showAckConfig, setShowAckConfig] = useState(false);
+  const [savingAck, setSavingAck] = useState(false);
+  const [ackSuccess, setAckSuccess] = useState('');
+  const [ackError, setAckError] = useState('');
+
   const load = useCallback(async () => {
     try {
       setLoading(true);
       setError('');
-      const [data, prompts] = await Promise.all([fetchAiConfig(), fetchAiPrompts()]);
+      const [data, prompts, ack] = await Promise.all([
+        fetchAiConfig(),
+        fetchAiPrompts(),
+        fetchAckConfig(),
+      ]);
       setConfig(data);
       setModel(data.model);
       setBaseUrl(data.base_url);
@@ -49,6 +63,9 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
       setPromptsData(prompts);
       setScoringPrompt(prompts.scoring_system_prompt ?? prompts.default_scoring_system_prompt);
       setMetaPrompt(prompts.meta_system_prompt ?? prompts.default_meta_system_prompt);
+      setAckConfig(ack);
+      setAckMode(ack.mode);
+      setAckPrompt(ack.prompt);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('Authentication')) { onAuthError(); return; }
@@ -434,6 +451,143 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
                 This prompt is sent as the <code>system</code> message during meta-analysis (window-level).
                 The user message includes the system specification, previous context, open findings, and current window events.
               </span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── Event Acknowledgement Configuration ─────────── */}
+      <div className="ai-prompts-section">
+        <h3>Event Acknowledgement Behaviour</h3>
+        <p className="ai-config-desc">
+          Configure how the LLM handles events that have been acknowledged by a user.
+          Acknowledged events are always excluded from per-event scoring.
+          The setting below controls how they appear in <strong>meta-analysis</strong>.
+        </p>
+
+        {ackError && (
+          <div className="error-msg" role="alert">
+            {ackError}
+            <button className="error-dismiss" onClick={() => setAckError('')} aria-label="Dismiss">&times;</button>
+          </div>
+        )}
+        {ackSuccess && (
+          <div className="success-msg" role="status">
+            {ackSuccess}
+            <button className="error-dismiss" onClick={() => setAckSuccess('')} aria-label="Dismiss">&times;</button>
+          </div>
+        )}
+
+        <div className="prompt-block">
+          <button
+            type="button"
+            className="prompt-toggle"
+            onClick={() => setShowAckConfig((v) => !v)}
+          >
+            <span className={`prompt-chevron${showAckConfig ? ' open' : ''}`}>&#9654;</span>
+            Acknowledgement Settings
+          </button>
+
+          {showAckConfig && (
+            <div className="prompt-editor">
+              <div className="form-group" style={{ marginBottom: 16 }}>
+                <label htmlFor="ack-mode">Meta-analysis mode for acknowledged events</label>
+                <select
+                  id="ack-mode"
+                  value={ackMode}
+                  onChange={(e) => setAckMode(e.target.value as 'skip' | 'context_only')}
+                  style={{ maxWidth: 320 }}
+                >
+                  <option value="context_only">Context only (include with ack prompt)</option>
+                  <option value="skip">Skip entirely (exclude from meta-analysis)</option>
+                </select>
+                <span className="form-hint">
+                  <strong>Context only</strong>: Acknowledged events are sent to the LLM with a special note (see prompt below),
+                  so the LLM can use them for pattern recognition but won't raise new findings.
+                  <br />
+                  <strong>Skip</strong>: Acknowledged events are completely excluded from meta-analysis.
+                </span>
+              </div>
+
+              {ackMode === 'context_only' && (
+                <div className="form-group" style={{ marginBottom: 16 }}>
+                  <label htmlFor="ack-prompt">Ack prompt (prepended to acknowledged events)</label>
+                  <textarea
+                    id="ack-prompt"
+                    className="prompt-textarea"
+                    value={ackPrompt}
+                    onChange={(e) => setAckPrompt(e.target.value)}
+                    rows={3}
+                    spellCheck={false}
+                  />
+                  <span className="form-hint">
+                    This text is prepended to each acknowledged event in the LLM context
+                    (as <code>[ACK] event message — {'<'}your prompt{'>'}</code>).
+                  </span>
+                </div>
+              )}
+
+              <div className="prompt-editor-actions">
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={savingAck}
+                  onClick={async () => {
+                    setSavingAck(true);
+                    setAckError('');
+                    setAckSuccess('');
+                    try {
+                      const payload: { mode?: 'skip' | 'context_only'; prompt?: string } = {};
+                      if (ackMode !== ackConfig?.mode) payload.mode = ackMode;
+                      if (ackPrompt !== ackConfig?.prompt) payload.prompt = ackPrompt;
+                      if (!Object.keys(payload).length) {
+                        setAckSuccess('No changes to save.');
+                        setSavingAck(false);
+                        return;
+                      }
+                      const updated = await updateAckConfig(payload);
+                      setAckConfig(updated);
+                      setAckMode(updated.mode);
+                      setAckPrompt(updated.prompt);
+                      setAckSuccess('Acknowledgement settings saved.');
+                    } catch (err: unknown) {
+                      const msg = err instanceof Error ? err.message : String(err);
+                      if (msg.includes('Authentication')) { onAuthError(); return; }
+                      setAckError(msg);
+                    } finally {
+                      setSavingAck(false);
+                    }
+                  }}
+                >
+                  {savingAck ? 'Saving...' : 'Save Settings'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-outline"
+                  disabled={savingAck}
+                  onClick={async () => {
+                    if (!window.confirm('Reset acknowledgement settings to defaults?')) return;
+                    setSavingAck(true);
+                    setAckError('');
+                    setAckSuccess('');
+                    try {
+                      const updated = await updateAckConfig({ mode: 'context_only', prompt: '' });
+                      setAckConfig(updated);
+                      setAckMode(updated.mode);
+                      setAckPrompt(updated.prompt);
+                      setAckSuccess('Settings reset to defaults.');
+                    } catch (err: unknown) {
+                      const msg = err instanceof Error ? err.message : String(err);
+                      if (msg.includes('Authentication')) { onAuthError(); return; }
+                      setAckError(msg);
+                    } finally {
+                      setSavingAck(false);
+                    }
+                  }}
+                >
+                  Reset to Default
+                </button>
+              </div>
             </div>
           )}
         </div>
