@@ -38,15 +38,11 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // 4. Start pipeline scheduler (if LLM key is configured)
-  let pipelineScheduler: { stop: () => void } | undefined;
-  if (process.env.OPENAI_API_KEY) {
-    const llm = new OpenAiAdapter();
-    const intervalMs = envIntervalMs(process.env.PIPELINE_INTERVAL_MS, 5 * 60 * 1000);
-    pipelineScheduler = startPipelineScheduler(db, llm, intervalMs);
-  } else {
-    console.log(`[${localTimestamp()}] OPENAI_API_KEY not set — pipeline scheduler disabled.`);
-  }
+  // 4. Start pipeline scheduler — always starts, checks AI config dynamically
+  //    (API key may come from env or DB, and can be set/changed via UI at runtime)
+  const llm = new OpenAiAdapter();
+  const intervalMs = envIntervalMs(process.env.PIPELINE_INTERVAL_MS, 5 * 60 * 1000);
+  const pipelineScheduler = startPipelineScheduler(db, llm, intervalMs);
 
   // 5. Start connector poll scheduler
   const connectorIntervalMs = envIntervalMs(process.env.CONNECTOR_POLL_INTERVAL_MS, 60_000);

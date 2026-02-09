@@ -1,5 +1,6 @@
 import type { Knex } from 'knex';
 import { localTimestamp } from '../../config/index.js';
+import { resolveAiConfig } from '../llm/aiConfig.js';
 
 /**
  * RAG-style natural language query endpoint.
@@ -16,11 +17,13 @@ export async function askQuestion(
   question: string,
   options?: { systemId?: string; from?: string; to?: string },
 ): Promise<{ answer: string; context_used: number }> {
-  const apiKey = process.env.OPENAI_API_KEY;
-  const model = process.env.OPENAI_MODEL ?? 'gpt-4o-mini';
-  const baseUrl = process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1';
+  // Resolve config from DB first, then env vars (supports runtime changes via UI)
+  const aiCfg = await resolveAiConfig(db);
+  const apiKey = aiCfg.apiKey;
+  const model = aiCfg.model;
+  const baseUrl = aiCfg.baseUrl;
 
-  if (!apiKey) throw new Error('OPENAI_API_KEY not configured');
+  if (!apiKey) throw new Error('OPENAI_API_KEY not configured. Set it in Settings → AI Model or via environment variable.');
 
   // Sanitize question (A03: limit length, strip control chars)
   const sanitized = question.replace(/[\x00-\x1f]/g, '').slice(0, 500);

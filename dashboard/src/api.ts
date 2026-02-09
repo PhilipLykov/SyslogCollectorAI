@@ -193,6 +193,143 @@ export async function deleteSource(id: string): Promise<void> {
   return apiFetch(`/api/v1/sources/${id}`, { method: 'DELETE' });
 }
 
+// ── AI Configuration ─────────────────────────────────────────
+
+export interface AiConfigResponse {
+  model: string;
+  base_url: string;
+  api_key_set: boolean;
+  api_key_hint: string;
+  api_key_source: 'database' | 'environment' | 'none';
+}
+
+export async function fetchAiConfig(): Promise<AiConfigResponse> {
+  return apiFetch('/api/v1/ai-config');
+}
+
+export async function updateAiConfig(data: {
+  model?: string;
+  base_url?: string;
+  api_key?: string;
+}): Promise<AiConfigResponse> {
+  return apiFetch('/api/v1/ai-config', {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+// ── Notification Channels ────────────────────────────────────
+
+export type ChannelType = 'webhook' | 'pushover' | 'ntfy' | 'gotify' | 'telegram';
+
+export interface NotificationChannel {
+  id: string;
+  type: ChannelType;
+  name: string;
+  config: Record<string, unknown>;
+  enabled: boolean;
+  scope: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function fetchNotificationChannels(): Promise<NotificationChannel[]> {
+  return apiFetch('/api/v1/notification-channels');
+}
+
+export async function createNotificationChannel(data: {
+  type: ChannelType;
+  name: string;
+  config: Record<string, unknown>;
+  enabled?: boolean;
+}): Promise<NotificationChannel> {
+  return apiFetch('/api/v1/notification-channels', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateNotificationChannel(
+  id: string,
+  data: {
+    name?: string;
+    config?: Record<string, unknown>;
+    enabled?: boolean;
+  },
+): Promise<NotificationChannel> {
+  return apiFetch(`/api/v1/notification-channels/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteNotificationChannel(id: string): Promise<void> {
+  return apiFetch(`/api/v1/notification-channels/${id}`, { method: 'DELETE' });
+}
+
+export async function testNotificationChannel(id: string): Promise<{ status: string; message: string }> {
+  return apiFetch(`/api/v1/notification-channels/${id}/test`, { method: 'POST' });
+}
+
+// ── Notification Rules ───────────────────────────────────────
+
+export interface NotificationRule {
+  id: string;
+  channel_id: string;
+  trigger_type: string;
+  trigger_config: Record<string, unknown>;
+  filters: Record<string, unknown> | null;
+  throttle_interval_seconds: number | null;
+  send_recovery: boolean;
+  notify_only_on_state_change: boolean;
+  template_title: string | null;
+  template_body: string | null;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function fetchNotificationRules(): Promise<NotificationRule[]> {
+  return apiFetch('/api/v1/notification-rules');
+}
+
+export async function createNotificationRule(data: {
+  channel_id: string;
+  trigger_type: string;
+  trigger_config: Record<string, unknown>;
+  filters?: Record<string, unknown>;
+  throttle_interval_seconds?: number;
+  send_recovery?: boolean;
+  notify_only_on_state_change?: boolean;
+  enabled?: boolean;
+}): Promise<NotificationRule> {
+  return apiFetch('/api/v1/notification-rules', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateNotificationRule(
+  id: string,
+  data: Partial<{
+    trigger_config: Record<string, unknown>;
+    filters: Record<string, unknown> | null;
+    throttle_interval_seconds: number | null;
+    send_recovery: boolean;
+    notify_only_on_state_change: boolean;
+    enabled: boolean;
+  }>,
+): Promise<NotificationRule> {
+  return apiFetch(`/api/v1/notification-rules/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteNotificationRule(id: string): Promise<void> {
+  return apiFetch(`/api/v1/notification-rules/${id}`, { method: 'DELETE' });
+}
+
 // ── LLM Usage ────────────────────────────────────────────────
 
 export interface LlmUsageRecord {

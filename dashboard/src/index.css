@@ -916,7 +916,8 @@ input:focus-visible,
   margin-top: 4px;
 }
 
-.field-hint {
+.field-hint,
+.form-hint {
   display: block;
   color: var(--text-muted);
   font-size: 0.78rem;
@@ -1305,6 +1306,350 @@ input:focus-visible,
   color: var(--text-muted);
 }
 
+/* ── Settings sub-tabs ─────────────────────────────────── */
+
+.settings-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0;
+}
+
+.settings-tab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+  padding: 10px 18px;
+  transition: color 0.15s, border-color 0.15s;
+  border-radius: 0;
+}
+
+.settings-tab:hover {
+  color: var(--text);
+}
+
+.settings-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+/* ── Success message ───────────────────────────────────── */
+
+.success-msg {
+  position: relative;
+  background: rgba(74, 222, 128, 0.1);
+  border: 1px solid var(--green);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  color: var(--green);
+  margin-bottom: 16px;
+  font-size: 0.875rem;
+}
+
+/* ── AI Config section ─────────────────────────────────── */
+
+.ai-config-section {
+  max-width: 640px;
+}
+
+.ai-config-header {
+  margin-bottom: 24px;
+}
+
+.ai-config-header h3 {
+  font-size: 1.15rem;
+  margin-bottom: 8px;
+}
+
+.ai-config-desc {
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.ai-config-form {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+}
+
+.ai-config-form .form-hint {
+  display: block;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  margin-top: 4px;
+  opacity: 0.8;
+}
+
+.ai-key-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.ai-key-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.ai-key-badge.set {
+  background: rgba(74, 222, 128, 0.12);
+  color: var(--green);
+}
+
+.ai-key-badge.not-set {
+  background: rgba(248, 113, 113, 0.12);
+  color: var(--red);
+}
+
+.ai-key-hint {
+  font-family: monospace;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  background: var(--bg);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.ai-key-source {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.ai-key-source strong {
+  color: var(--accent);
+}
+
+.ai-key-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.ai-key-input-group {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.ai-key-input-group input {
+  flex: 1;
+  padding: 9px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 0.875rem;
+  font-family: monospace;
+  transition: border-color 0.15s;
+}
+
+.ai-key-input-group input:focus {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(129, 140, 248, 0.25);
+}
+
+.ai-config-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 24px;
+}
+
+.ai-config-actions .btn {
+  width: auto;
+}
+
+/* ── Notifications section ─────────────────────────────── */
+
+.notif-section {
+  max-width: 900px;
+}
+
+.notif-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 24px;
+  gap: 16px;
+}
+
+.notif-header h3 {
+  font-size: 1.15rem;
+  margin-bottom: 4px;
+}
+
+.notif-desc {
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.notif-empty {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--text-muted);
+}
+
+.notif-empty-icon {
+  font-size: 2.5rem;
+  margin-bottom: 12px;
+  opacity: 0.4;
+}
+
+.notif-empty h4 {
+  font-size: 1.1rem;
+  margin-bottom: 8px;
+  color: var(--text);
+}
+
+.notif-empty p {
+  max-width: 500px;
+  margin: 0 auto;
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+/* ── Channel cards ─────────────────────────────────────── */
+
+.notif-channel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.notif-channel-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+  transition: border-color 0.15s;
+}
+
+.notif-channel-card:hover {
+  border-color: var(--accent);
+}
+
+.notif-channel-card.disabled {
+  opacity: 0.6;
+}
+
+.notif-channel-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.notif-channel-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.notif-channel-name {
+  font-size: 0.95rem;
+}
+
+.notif-disabled-badge {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  background: var(--bg);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.notif-channel-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.notif-channel-detail {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+/* ── Notification type badges ──────────────────────────── */
+
+.notif-type-badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+}
+
+.notif-type-badge.webhook {
+  background: rgba(129, 140, 248, 0.12);
+  color: var(--accent);
+}
+
+.notif-type-badge.ntfy {
+  background: rgba(74, 222, 128, 0.12);
+  color: var(--green);
+}
+
+.notif-type-badge.telegram {
+  background: rgba(56, 189, 248, 0.12);
+  color: #38bdf8;
+}
+
+.notif-type-badge.gotify {
+  background: rgba(251, 146, 60, 0.12);
+  color: var(--orange);
+}
+
+.notif-type-badge.pushover {
+  background: rgba(250, 204, 21, 0.12);
+  color: var(--yellow);
+}
+
+/* ── Channel config summary ────────────────────────────── */
+
+.notif-config-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+}
+
+.notif-config-item {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.notif-config-label {
+  font-weight: 500;
+}
+
+.notif-config-item code {
+  background: var(--bg);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.78rem;
+  color: var(--accent);
+  word-break: break-all;
+}
+
 /* ── Responsive breakpoints ─────────────────────────────── */
 
 @media (max-width: 768px) {
@@ -1396,6 +1741,35 @@ input:focus-visible,
 
   .usage-summary-value {
     font-size: 1.2rem;
+  }
+
+  .settings-tabs {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .settings-tab {
+    white-space: nowrap;
+    padding: 8px 14px;
+    font-size: 0.85rem;
+  }
+
+  .ai-config-form {
+    padding: 16px;
+  }
+
+  .notif-channel-top {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .notif-channel-actions {
+    flex-wrap: wrap;
+  }
+
+  .notif-header {
+    flex-direction: column;
+    gap: 12px;
   }
 }
 

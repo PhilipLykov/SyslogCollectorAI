@@ -3,6 +3,7 @@ import { getDb } from '../../db/index.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { CRITERIA } from '../../types/index.js';
 import { estimateCost, MODEL_PRICING } from '../llm/pricing.js';
+import { resolveAiConfig } from '../llm/aiConfig.js';
 
 /**
  * Scores API — exposes effective scores, event scores, and meta results.
@@ -155,9 +156,10 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
 
       const usage = await query.select('*');
 
-      // Current model from env (used only as fallback for legacy records
+      // Current model from DB/env (used only as fallback for legacy records
       // that were inserted before migration 008 added the model column).
-      const currentModel = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+      const aiCfg = await resolveAiConfig(db);
+      const currentModel = aiCfg.model;
 
       // Resolve system names for display
       const systemIds = [...new Set(usage.map((r: any) => r.system_id).filter(Boolean))];

@@ -1,10 +1,21 @@
 import type { Knex } from 'knex';
 import { localTimestamp } from '../../config/index.js';
-import { type LlmAdapter } from '../llm/adapter.js';
+import { type LlmAdapter, OpenAiAdapter } from '../llm/adapter.js';
+import { resolveAiConfig } from '../llm/aiConfig.js';
 import { runPerEventScoringJob } from './scoringJob.js';
 import { createWindows } from './windowing.js';
 import { metaAnalyzeWindow } from './metaAnalyze.js';
 import { evaluateAlerts } from '../alerting/evaluator.js';
+
+/**
+ * Sync the adapter's config from the DB (app_config table), falling
+ * back to environment variables. Called before each pipeline run so
+ * changes made via the UI take effect without a restart.
+ */
+async function syncAdapterConfig(db: Knex, llm: OpenAiAdapter): Promise<void> {
+  const cfg = await resolveAiConfig(db);
+  llm.updateConfig({ apiKey: cfg.apiKey, model: cfg.model, baseUrl: cfg.baseUrl });
+}
 
 /**
  * Pipeline orchestrator: runs the full scoring pipeline periodically.
@@ -63,11 +74,12 @@ export async function runPipeline(
 
 /**
  * Start a periodic pipeline runner.
+ * Syncs AI config from DB before each run and skips if no API key.
  * Returns a cleanup function to stop the interval.
  */
 export function startPipelineScheduler(
   db: Knex,
-  llm: LlmAdapter,
+  llm: OpenAiAdapter,
   intervalMs: number = 5 * 60 * 1000, // default 5 minutes
 ): { stop: () => void } {
   let running = false;
@@ -79,6 +91,14 @@ export function startPipelineScheduler(
     }
     running = true;
     try {
+      // Sync config from DB before each run (picks up UI changes)
+      await syncAdapterConfig(db, llm);
+
+      if (!llm.isConfigured()) {
+        // No API key from any source — skip silently
+        return;
+      }
+
       await runPipeline(db, llm);
     } finally {
       running = false;
