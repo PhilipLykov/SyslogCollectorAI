@@ -1,6 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
-  type MaintenanceConfig,
   type MaintenanceConfigResponse,
   type MaintenanceLogEntry,
   type MaintenanceRunResult,
