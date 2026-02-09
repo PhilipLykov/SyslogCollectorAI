@@ -359,10 +359,28 @@ input:focus-visible,
   margin-bottom: 8px;
 }
 
-.dd-ack-actions {
+.dd-top-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.dd-top-row .drill-down-heading {
+  margin-bottom: 4px;
+}
+
+.dd-top-row .drill-down-description {
+  margin-bottom: 0;
+}
+
+.dd-top-actions {
   display: flex;
   gap: 8px;
-  margin-bottom: 16px;
+  align-items: center;
+  flex-shrink: 0;
+  padding-top: 4px;
 }
 
 .bulk-ack-msg {

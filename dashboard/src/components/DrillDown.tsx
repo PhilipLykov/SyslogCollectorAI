@@ -258,11 +258,32 @@ export function DrillDown({ system, onBack, onAuthError }: DrillDownProps) {
         ← Back to overview
       </button>
 
-      <h2 ref={headingRef} tabIndex={-1} className="drill-down-heading">
-        {system.name}
-      </h2>
-      {system.description && (
-        <p className="drill-down-description">{system.description}</p>
+      <div className="dd-top-row">
+        <div>
+          <h2 ref={headingRef} tabIndex={-1} className="drill-down-heading">
+            {system.name}
+          </h2>
+          {system.description && (
+            <p className="drill-down-description">{system.description}</p>
+          )}
+        </div>
+        <div className="dd-top-actions">
+          <button
+            className="btn btn-sm btn-danger"
+            onClick={handleAckAllEvents}
+            disabled={bulkAcking}
+            title="Acknowledge all events for this system up to now"
+          >
+            {bulkAcking ? '...' : 'Ack All Events'}
+          </button>
+        </div>
+      </div>
+
+      {/* ── Bulk ack status message ── */}
+      {bulkAckMsg && (
+        <div className={`bulk-ack-msg${bulkAckMsg.startsWith('Error') ? ' bulk-ack-error' : ''}`}>
+          {bulkAckMsg}
+        </div>
       )}
 
       {/* Current scores — clickable for criterion drill-down */}
@@ -380,25 +401,6 @@ export function DrillDown({ system, onBack, onAuthError }: DrillDownProps) {
         fixedSystemName={system.name}
         onAuthError={onAuthError}
       />
-
-      {/* ── Bulk ack status message ── */}
-      {bulkAckMsg && (
-        <div className={`bulk-ack-msg${bulkAckMsg.startsWith('Error') ? ' bulk-ack-error' : ''}`}>
-          {bulkAckMsg}
-        </div>
-      )}
-
-      {/* ── Ack All Events button ── */}
-      <div className="dd-ack-actions">
-        <button
-          className="btn btn-sm btn-outline"
-          onClick={handleAckAllEvents}
-          disabled={bulkAcking}
-          title="Acknowledge all events for this system up to now"
-        >
-          {bulkAcking ? '...' : 'Ack All Events'}
-        </button>
-      </div>
 
       {/* ── Persistent Findings panel ── */}
       {!loading && (
