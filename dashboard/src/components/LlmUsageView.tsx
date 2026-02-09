@@ -7,8 +7,10 @@ interface LlmUsageViewProps {
 
 type DateRange = '24h' | '7d' | '30d' | 'all';
 
-function formatCost(cost: number | null): string {
-  if (cost === null || cost === undefined || !Number.isFinite(cost)) return '—';
+function formatCost(raw: number | string | null | undefined): string {
+  if (raw === null || raw === undefined) return '—';
+  const cost = typeof raw === 'string' ? Number(raw) : raw;
+  if (!Number.isFinite(cost)) return '—';
   if (cost < 0.000001) return '$0.00';
   if (cost < 0.01) return `$${cost.toFixed(6)}`;
   if (cost < 1) return `$${cost.toFixed(4)}`;
