@@ -21,17 +21,31 @@ function systemColor(name: string): string {
   return COLORS[Math.abs(hash) % COLORS.length];
 }
 
-function safeDate(iso: string): string {
+/** Format ISO string as DD.MM.YYYY HH:MM:SS (EU format). */
+function formatEuDate(iso: string): string {
   try {
-    return new Date(iso).toLocaleString();
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = d.getFullYear();
+    const hours = String(d.getHours()).padStart(2, '0');
+    const minutes = String(d.getMinutes()).padStart(2, '0');
+    const seconds = String(d.getSeconds()).padStart(2, '0');
+    return `${day}.${month}.${year} ${hours}:${minutes}:${seconds}`;
   } catch {
     return iso;
   }
 }
 
-function safeTime(iso: string): string {
+function formatEuTime(iso: string): string {
   try {
-    return new Date(iso).toLocaleTimeString();
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    const hours = String(d.getHours()).padStart(2, '0');
+    const minutes = String(d.getMinutes()).padStart(2, '0');
+    const seconds = String(d.getSeconds()).padStart(2, '0');
+    return `${hours}:${minutes}:${seconds}`;
   } catch {
     return iso;
   }
@@ -182,7 +196,7 @@ export function TracePanel({ value, anchorTime, onClose, onAuthError }: Props) {
                 across <strong>{data.systems.length}</strong> system{data.systems.length !== 1 ? 's' : ''}
               </span>
               <span className="trace-window-label">
-                {safeDate(data.window.from)} — {safeDate(data.window.to)}
+                {formatEuDate(data.window.from)} — {formatEuDate(data.window.to)}
               </span>
             </div>
 
@@ -215,7 +229,7 @@ export function TracePanel({ value, anchorTime, onClose, onAuthError }: Props) {
                   />
                   <div className="trace-event-content">
                     <div className="trace-event-header">
-                      <span className="trace-event-time">{safeTime(evt.timestamp)}</span>
+                      <span className="trace-event-time">{formatEuTime(evt.timestamp)}</span>
                       <span className="trace-event-system">{evt.system_name}</span>
                       {evt.severity && (
                         <span className={`severity-badge ${evt.severity.toLowerCase()}`}>
@@ -236,7 +250,7 @@ export function TracePanel({ value, anchorTime, onClose, onAuthError }: Props) {
                             <strong>Event ID:</strong> <code>{evt.id}</code>
                           </div>
                           <div className="ee-detail-field">
-                            <strong>Timestamp:</strong> {safeDate(evt.timestamp)}
+                            <strong>Timestamp:</strong> {formatEuDate(evt.timestamp)}
                           </div>
                           {evt.trace_id && (
                             <div className="ee-detail-field">

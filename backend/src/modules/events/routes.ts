@@ -14,7 +14,7 @@ const ALLOWED_SORT_COLUMNS = new Set([
 
 /** Max rows per search page. */
 const MAX_LIMIT = 200;
-const DEFAULT_LIMIT = 50;
+const DEFAULT_LIMIT = 100;
 
 /** Max rows for facets (distinct values). */
 const FACET_LIMIT = 200;

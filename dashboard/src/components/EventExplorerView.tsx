@@ -13,29 +13,87 @@ interface Props {
   onAuthError: () => void;
 }
 
-const PAGE_SIZE = 50;
+const PAGE_SIZE = 100;
 
-function safeDate(iso: string): string {
+// ── EU date format helpers ────────────────────────────────────
+
+/** Format ISO string as DD.MM.YYYY HH:MM:SS (EU format). */
+function formatEuDate(iso: string): string {
   try {
-    return new Date(iso).toLocaleString();
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = d.getFullYear();
+    const hours = String(d.getHours()).padStart(2, '0');
+    const minutes = String(d.getMinutes()).padStart(2, '0');
+    const seconds = String(d.getSeconds()).padStart(2, '0');
+    return `${day}.${month}.${year} ${hours}:${minutes}:${seconds}`;
   } catch {
     return iso;
   }
+}
+
+/** Get today's start (00:00) as datetime-local input value (YYYY-MM-DDTHH:MM). */
+function todayStart(): string {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}T00:00`;
+}
+
+/** Get today's end (23:59) as datetime-local input value (YYYY-MM-DDTHH:MM). */
+function todayEnd(): string {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}T23:59`;
+}
+
+// ── Keyword highlighting ──────────────────────────────────────
+
+/** Highlight all occurrences of `term` in `text` (case-insensitive). */
+function highlightText(text: string, term: string): React.ReactNode[] {
+  if (!term || term.length === 0) return [text];
+  const parts: React.ReactNode[] = [];
+  const lower = text.toLowerCase();
+  const termLower = term.toLowerCase();
+  let start = 0;
+  let idx = lower.indexOf(termLower, start);
+  let key = 0;
+  while (idx !== -1) {
+    if (idx > start) {
+      parts.push(text.slice(start, idx));
+    }
+    parts.push(
+      <mark key={key++} className="ee-highlight">
+        {text.slice(idx, idx + term.length)}
+      </mark>,
+    );
+    start = idx + term.length;
+    idx = lower.indexOf(termLower, start);
+  }
+  if (start < text.length) {
+    parts.push(text.slice(start));
+  }
+  return parts;
 }
 
 export function EventExplorerView({ onAuthError }: Props) {
   // ── Facets (for filter dropdowns) ────────────────────────
   const [facets, setFacets] = useState<EventFacets | null>(null);
 
-  // ── Search state ─────────────────────────────────────────
+  // ── Search state (defaults: today's date range) ──────────
   const [query, setQuery] = useState('');
   const [searchMode, setSearchMode] = useState<'fulltext' | 'contains'>('fulltext');
   const [systemFilter, setSystemFilter] = useState('');
   const [severityFilter, setSeverityFilter] = useState('');
   const [hostFilter, setHostFilter] = useState('');
   const [programFilter, setProgramFilter] = useState('');
-  const [fromDate, setFromDate] = useState('');
-  const [toDate, setToDate] = useState('');
+  const [fromDate, setFromDate] = useState(todayStart);
+  const [toDate, setToDate] = useState(todayEnd);
   const [sortBy, setSortBy] = useState('timestamp');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [page, setPage] = useState(1);
@@ -56,6 +114,10 @@ export function EventExplorerView({ onAuthError }: Props) {
   const [traceAnchorTime, setTraceAnchorTime] = useState<string | undefined>(undefined);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const initialLoadDone = useRef(false);
+
+  /** The current search term for highlighting (kept in sync after search completes). */
+  const [activeHighlight, setActiveHighlight] = useState('');
 
   // Load facets on mount
   useEffect(() => {
@@ -100,6 +162,8 @@ export function EventExplorerView({ onAuthError }: Props) {
         setResult(data);
         setPage(targetPage);
         setHasSearched(true);
+        // Update highlight term based on "contains" mode (full-text tokenizes differently)
+        setActiveHighlight(searchMode === 'contains' && query.trim() ? query.trim() : query.trim());
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         if (msg.includes('Authentication')) {
@@ -113,6 +177,15 @@ export function EventExplorerView({ onAuthError }: Props) {
     },
     [query, searchMode, systemFilter, severityFilter, hostFilter, programFilter, fromDate, toDate, sortBy, sortDir, page, onAuthError],
   );
+
+  // ── Auto-load today's events on mount ─────────────────────
+  useEffect(() => {
+    if (!initialLoadDone.current) {
+      initialLoadDone.current = true;
+      doSearch(1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleSearch = () => {
     setPage(1);
@@ -161,8 +234,6 @@ export function EventExplorerView({ onAuthError }: Props) {
     else if (field === 'program') setProgramFilter(value);
     else if (field === 'severity') setSeverityFilter(value);
     setFiltersExpanded(true);
-    // Increment trigger — React batches the state updates,
-    // so by the time the useEffect fires, doSearch has the new values.
     setFilterTrigger((t) => t + 1);
   };
 
@@ -187,11 +258,12 @@ export function EventExplorerView({ onAuthError }: Props) {
     setSeverityFilter('');
     setHostFilter('');
     setProgramFilter('');
-    setFromDate('');
-    setToDate('');
+    setFromDate(todayStart());
+    setToDate(todayEnd());
     setSortBy('timestamp');
     setSortDir('desc');
     setPage(1);
+    setActiveHighlight('');
   };
 
   const sortIndicator = (col: string) => {
@@ -200,6 +272,12 @@ export function EventExplorerView({ onAuthError }: Props) {
   };
 
   const totalPages = result ? Math.ceil(result.total / result.limit) : 0;
+
+  /** Render message with optional keyword highlighting. */
+  const renderMessage = (text: string) => {
+    if (activeHighlight) return highlightText(text, activeHighlight);
+    return text;
+  };
 
   return (
     <div className="event-explorer">
@@ -303,20 +381,6 @@ export function EventExplorerView({ onAuthError }: Props) {
       {/* ── Error ────────────────────────────────────────── */}
       {error && <div className="error-msg" role="alert">{error}</div>}
 
-      {/* ── Results info ─────────────────────────────────── */}
-      {result && (
-        <div className="ee-results-info">
-          <span>
-            {result.total.toLocaleString()} event{result.total !== 1 ? 's' : ''} found
-          </span>
-          {totalPages > 1 && (
-            <span className="ee-page-info">
-              Page {result.page} of {totalPages}
-            </span>
-          )}
-        </div>
-      )}
-
       {/* ── Results table ────────────────────────────────── */}
       {result && result.events.length > 0 && (
         <div className="table-responsive">
@@ -372,7 +436,7 @@ export function EventExplorerView({ onAuthError }: Props) {
                     aria-expanded={expandedRow === e.id}
                   >
                     <td style={{ whiteSpace: 'nowrap' }}>
-                      {safeDate(e.timestamp)}
+                      {formatEuDate(e.timestamp)}
                     </td>
                     <td>
                       <span className="ee-system-tag">{e.system_name ?? '\u2014'}</span>
@@ -411,7 +475,7 @@ export function EventExplorerView({ onAuthError }: Props) {
                       <span className={e.program ? 'ee-clickable-value' : ''}>{e.program ?? '\u2014'}</span>
                     </td>
                     <td className={expandedRow === e.id ? 'message-expanded' : 'message-truncated'}>
-                      {e.message}
+                      {renderMessage(e.message)}
                     </td>
                   </tr>
 
@@ -421,14 +485,14 @@ export function EventExplorerView({ onAuthError }: Props) {
                       <td colSpan={6}>
                         <div className="ee-detail-content">
                           <div className="ee-detail-grid">
-                            <div className="ee-detail-field">
-                              <strong>Event ID:</strong> <code>{e.id}</code>
+                            <div className="ee-detail-field ee-detail-field-wide">
+                              <strong>Event ID:</strong> <code className="ee-id-code">{e.id}</code>
                             </div>
                             <div className="ee-detail-field">
                               <strong>System:</strong> {e.system_name ?? e.system_id}
                             </div>
                             <div className="ee-detail-field">
-                              <strong>Received:</strong> {e.received_at ? safeDate(e.received_at) : '\u2014'}
+                              <strong>Received:</strong> {e.received_at ? formatEuDate(e.received_at) : '\u2014'}
                             </div>
                             <div className="ee-detail-field">
                               <strong>Service:</strong> {e.service ?? '\u2014'}
@@ -465,7 +529,7 @@ export function EventExplorerView({ onAuthError }: Props) {
 
                           <div className="ee-detail-message">
                             <strong>Full message:</strong>
-                            <pre>{e.message}</pre>
+                            <pre>{renderMessage(e.message)}</pre>
                           </div>
 
                           {e.raw && (
@@ -503,21 +567,10 @@ export function EventExplorerView({ onAuthError }: Props) {
       )}
 
       {/* ── Empty state ──────────────────────────────────── */}
-      {result && result.events.length === 0 && (
+      {result && result.events.length === 0 && !loading && (
         <div className="empty-state">
           <h3>No events found</h3>
           <p>Try adjusting your search query or filters.</p>
-        </div>
-      )}
-
-      {/* ── No search yet ────────────────────────────────── */}
-      {!result && !loading && !error && (
-        <div className="empty-state">
-          <h3>Event Explorer</h3>
-          <p>
-            Search across all systems. Use the search bar above or expand filters to narrow results.
-            Press Enter or click Search to begin.
-          </p>
         </div>
       )}
 
@@ -529,26 +582,38 @@ export function EventExplorerView({ onAuthError }: Props) {
         </div>
       )}
 
-      {/* ── Pagination ───────────────────────────────────── */}
-      {result && totalPages > 1 && (
-        <div className="ee-pagination">
-          <button
-            className="btn btn-sm btn-outline"
-            disabled={page <= 1}
-            onClick={() => handlePageChange(page - 1)}
-          >
-            Previous
-          </button>
-          <span className="ee-page-display">
-            Page {page} of {totalPages}
-          </span>
-          <button
-            className="btn btn-sm btn-outline"
-            disabled={!result.has_more}
-            onClick={() => handlePageChange(page + 1)}
-          >
-            Next
-          </button>
+      {/* ── Footer: total count + pagination ─────────────── */}
+      {result && (
+        <div className="ee-footer">
+          <div className="ee-total-count">
+            Total: <strong>{result.total.toLocaleString()}</strong> event{result.total !== 1 ? 's' : ''}
+            {result.events.length > 0 && (
+              <span className="ee-showing">
+                {' '}(showing {((result.page - 1) * result.limit) + 1}\u2013{Math.min(result.page * result.limit, result.total)})
+              </span>
+            )}
+          </div>
+          {totalPages > 1 && (
+            <div className="ee-pagination">
+              <button
+                className="btn btn-sm btn-outline"
+                disabled={page <= 1}
+                onClick={() => handlePageChange(page - 1)}
+              >
+                Previous
+              </button>
+              <span className="ee-page-display">
+                Page {page} of {totalPages}
+              </span>
+              <button
+                className="btn btn-sm btn-outline"
+                disabled={!result.has_more}
+                onClick={() => handlePageChange(page + 1)}
+              >
+                Next
+              </button>
+            </div>
+          )}
         </div>
       )}
 
