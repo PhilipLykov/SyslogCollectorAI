@@ -120,6 +120,7 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
           'events.message',
           'events.severity',
           'events.host',
+          'events.source_ip',
           'events.program',
           'criteria.slug as criterion_slug',
           'criteria.name as criterion_name',

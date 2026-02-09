@@ -78,6 +78,7 @@ export function EventExplorerView({ onAuthError }: Props) {
   const [systemFilter, setSystemFilter] = useState('');
   const [severityFilter, setSeverityFilter] = useState('');
   const [hostFilter, setHostFilter] = useState('');
+  const [sourceIpFilter, setSourceIpFilter] = useState('');
   const [programFilter, setProgramFilter] = useState('');
   const [fromDate, setFromDate] = useState(todayStartEu());
   const [toDate, setToDate] = useState(todayEndEu());
@@ -149,6 +150,7 @@ export function EventExplorerView({ onAuthError }: Props) {
       if (systemFilter) params.system_id = systemFilter;
       if (severityFilter) params.severity = severityFilter;
       if (hostFilter) params.host = hostFilter;
+      if (sourceIpFilter) params.source_ip = sourceIpFilter;
       if (programFilter) params.program = programFilter;
       const isoFrom = euToIso(fromDate);
       const isoTo = euToIso(toDate);
@@ -173,7 +175,7 @@ export function EventExplorerView({ onAuthError }: Props) {
         setLoading(false);
       }
     },
-    [query, searchMode, systemFilter, severityFilter, hostFilter, programFilter, fromDate, toDate, sortBy, sortDir, page, onAuthError],
+    [query, searchMode, systemFilter, severityFilter, hostFilter, sourceIpFilter, programFilter, fromDate, toDate, sortBy, sortDir, page, onAuthError],
   );
 
   // ── Auto-load today's events on mount ─────────────────────
@@ -227,8 +229,9 @@ export function EventExplorerView({ onAuthError }: Props) {
     setExpandedRow((prev) => (prev === id ? null : id));
   };
 
-  const handleClickFilter = (field: 'host' | 'program' | 'severity', value: string) => {
+  const handleClickFilter = (field: 'host' | 'source_ip' | 'program' | 'severity', value: string) => {
     if (field === 'host') setHostFilter(value);
+    else if (field === 'source_ip') setSourceIpFilter(value);
     else if (field === 'program') setProgramFilter(value);
     else if (field === 'severity') setSeverityFilter(value);
     setFiltersExpanded(true);
@@ -255,6 +258,7 @@ export function EventExplorerView({ onAuthError }: Props) {
     setSystemFilter('');
     setSeverityFilter('');
     setHostFilter('');
+    setSourceIpFilter('');
     setProgramFilter('');
     setFromDate(todayStartEu());
     setToDate(todayEndEu());
@@ -473,6 +477,15 @@ export function EventExplorerView({ onAuthError }: Props) {
             </select>
           </div>
           <div className="ee-filter-group">
+            <label>Source IP</label>
+            <select value={sourceIpFilter} onChange={(e) => setSourceIpFilter(e.target.value)}>
+              <option value="">All</option>
+              {facets?.source_ips?.map((ip) => (
+                <option key={ip} value={ip}>{ip}</option>
+              ))}
+            </select>
+          </div>
+          <div className="ee-filter-group">
             <label>Program</label>
             <select value={programFilter} onChange={(e) => setProgramFilter(e.target.value)}>
               <option value="">All</option>
@@ -522,6 +535,13 @@ export function EventExplorerView({ onAuthError }: Props) {
                   title="Sort by host"
                 >
                   Host{sortIndicator('host')}
+                </th>
+                <th
+                  className="sortable-header"
+                  onClick={() => handleSort('source_ip')}
+                  title="Sort by source IP"
+                >
+                  Source IP{sortIndicator('source_ip')}
                 </th>
                 <th
                   className="sortable-header"
@@ -585,6 +605,15 @@ export function EventExplorerView({ onAuthError }: Props) {
                     <td
                       onClick={(ev) => {
                         ev.stopPropagation();
+                        if (e.source_ip) handleClickFilter('source_ip', e.source_ip);
+                      }}
+                      title={e.source_ip ? 'Click to filter by this IP' : undefined}
+                    >
+                      <span className={e.source_ip ? 'ee-clickable-value' : ''}>{e.source_ip ?? '\u2014'}</span>
+                    </td>
+                    <td
+                      onClick={(ev) => {
+                        ev.stopPropagation();
                         if (e.program) handleClickFilter('program', e.program);
                       }}
                       title={e.program ? 'Click to filter by this program' : undefined}
@@ -599,7 +628,7 @@ export function EventExplorerView({ onAuthError }: Props) {
                   {/* Expanded detail row */}
                   {expandedRow === e.id && (
                     <tr className="ee-detail-row">
-                      <td colSpan={6}>
+                      <td colSpan={7}>
                         <div className="ee-detail-content">
                           <div className="ee-detail-grid">
                             <div className="ee-detail-field ee-detail-field-wide">
@@ -607,6 +636,19 @@ export function EventExplorerView({ onAuthError }: Props) {
                             </div>
                             <div className="ee-detail-field">
                               <strong>System:</strong> {e.system_name ?? e.system_id}
+                            </div>
+                            <div className="ee-detail-field">
+                              <strong>Source IP:</strong>{' '}
+                              {e.source_ip ? (
+                                <code
+                                  className="ee-clickable-value"
+                                  onClick={() => handleClickFilter('source_ip', e.source_ip!)}
+                                  title="Click to filter by this IP"
+                                  style={{ cursor: 'pointer' }}
+                                >
+                                  {e.source_ip}
+                                </code>
+                              ) : '\u2014'}
                             </div>
                             <div className="ee-detail-field">
                               <strong>Received:</strong> {e.received_at ? formatEuDate(e.received_at) : '\u2014'}

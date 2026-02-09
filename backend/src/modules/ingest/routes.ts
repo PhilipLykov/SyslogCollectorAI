@@ -121,6 +121,7 @@ export async function registerIngestRoutes(app: FastifyInstance): Promise<void> 
           message: redacted.message,
           severity: redacted.severity ?? null,
           host: redacted.host ?? null,
+          source_ip: redacted.source_ip ?? null,
           service: redacted.service ?? null,
           facility: redacted.facility ?? null,
           program: redacted.program ?? null,

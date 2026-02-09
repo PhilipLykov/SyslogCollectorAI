@@ -429,12 +429,13 @@ export function SettingsView({ onAuthError }: SettingsViewProps) {
                       <div className="settings-help-content">
                         <p>
                           A <strong>selector</strong> is a set of field-matching rules. Each key is a log event field
-                          (e.g. <code>host</code>, <code>service</code>, <code>program</code>, <code>facility</code>)
+                          (e.g. <code>host</code>, <code>source_ip</code>, <code>service</code>, <code>program</code>, <code>facility</code>)
                           and its value is a <strong>regex pattern</strong> that must match.
                         </p>
                         <p>Examples:</p>
                         <ul>
                           <li><code>{'{"host": ".*"}'}</code> — matches all hosts (catch-all)</li>
+                          <li><code>{'{"source_ip": "^192\\\\.168\\\\.32\\\\."}'}</code> — matches events from 192.168.32.* subnet</li>
                           <li><code>{'{"host": "^web-\\\\d+"}'}</code> — matches hosts like web-01, web-02</li>
                           <li><code>{'{"service": "nginx", "host": "prod-.*"}'}</code> — matches nginx on prod servers</li>
                         </ul>

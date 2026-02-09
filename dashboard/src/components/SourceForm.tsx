@@ -11,7 +11,7 @@ interface SourceFormProps {
 }
 
 /** Known event fields that can be used in selectors. */
-const SELECTOR_FIELDS = ['host', 'service', 'program', 'facility', 'severity'] as const;
+const SELECTOR_FIELDS = ['host', 'source_ip', 'service', 'program', 'facility', 'severity'] as const;
 
 interface SelectorRow {
   field: string;

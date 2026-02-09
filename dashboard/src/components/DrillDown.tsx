@@ -333,6 +333,7 @@ export function DrillDown({ system, onBack, onAuthError }: DrillDownProps) {
                     <th>Severity</th>
                     <th>Time</th>
                     <th>Host</th>
+                    <th>Source IP</th>
                     <th>Program</th>
                     <th>Message</th>
                   </tr>
@@ -359,6 +360,7 @@ export function DrillDown({ system, onBack, onAuthError }: DrillDownProps) {
                         </td>
                         <td style={{ whiteSpace: 'nowrap' }}>{safeDate(ev.timestamp)}</td>
                         <td>{ev.host ?? '—'}</td>
+                        <td>{ev.source_ip ?? '—'}</td>
                         <td>{ev.program ?? '—'}</td>
                         <td className="criterion-message-cell">{ev.message}</td>
                       </tr>
@@ -545,6 +547,7 @@ export function DrillDown({ system, onBack, onAuthError }: DrillDownProps) {
                 <th scope="col">Time</th>
                 <th scope="col">Severity</th>
                 <th scope="col">Host</th>
+                <th scope="col">Source IP</th>
                 <th scope="col">Program</th>
                 <th scope="col">Message</th>
               </tr>
@@ -576,6 +579,7 @@ export function DrillDown({ system, onBack, onAuthError }: DrillDownProps) {
                     )}
                   </td>
                   <td>{e.host ?? '—'}</td>
+                  <td>{e.source_ip ?? '—'}</td>
                   <td>{e.program ?? '—'}</td>
                   <td className={expandedRow === e.id ? 'message-expanded' : 'message-truncated'}>
                     {e.message}

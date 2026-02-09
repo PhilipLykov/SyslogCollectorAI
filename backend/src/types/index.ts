@@ -27,6 +27,7 @@ export interface NormalizedEvent {
   message: string;
   severity?: string;
   host?: string;
+  source_ip?: string;         // IP address of the event source
   service?: string;
   facility?: string;
   program?: string;
@@ -77,6 +78,7 @@ export interface LogSourceSelector {
   program?: string;
   service?: string;
   host?: string;
+  source_ip?: string;
   tag?: string;
   [key: string]: string | undefined;
 }
@@ -123,6 +125,7 @@ export interface IngestEntry {
   message: string;
   severity?: string;
   host?: string;
+  source_ip?: string;
   service?: string;
   facility?: string;
   program?: string;

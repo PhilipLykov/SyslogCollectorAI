@@ -9,6 +9,7 @@ const ALLOWED_SORT_COLUMNS = new Set([
   'timestamp',
   'severity',
   'host',
+  'source_ip',
   'program',
   'service',
 ]);
@@ -34,6 +35,7 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
       system_id?: string;
       severity?: string;
       host?: string;
+      source_ip?: string;
       program?: string;
       service?: string;
       trace_id?: string;
@@ -54,6 +56,7 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
         system_id,
         severity,
         host,
+        source_ip,
         program,
         service,
         trace_id,
@@ -95,6 +98,9 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
       }
       if (host) {
         baseQuery.where('events.host', host);
+      }
+      if (source_ip) {
+        baseQuery.where('events.source_ip', source_ip);
       }
       if (program) {
         baseQuery.where('events.program', program);
@@ -155,6 +161,7 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
             'events.message',
             'events.severity',
             'events.host',
+            'events.source_ip',
             'events.service',
             'events.program',
             'events.facility',
@@ -222,13 +229,17 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
         return q;
       };
 
-      const [severities, hosts, programs, systems] = await Promise.all([
+      const [severities, hosts, sourceIps, programs, systems] = await Promise.all([
         baseWhere('events.severity')
           .distinct('events.severity as value')
           .orderBy('value')
           .limit(FACET_LIMIT),
         baseWhere('events.host')
           .distinct('events.host as value')
+          .orderBy('value')
+          .limit(FACET_LIMIT),
+        baseWhere('events.source_ip')
+          .distinct('events.source_ip as value')
           .orderBy('value')
           .limit(FACET_LIMIT),
         baseWhere('events.program')
@@ -243,6 +254,7 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
       return reply.send({
         severities: severities.map((r: any) => r.value),
         hosts: hosts.map((r: any) => r.value),
+        source_ips: sourceIps.map((r: any) => r.value),
         programs: programs.map((r: any) => r.value),
         systems: systems.map((r: any) => ({ id: r.id, name: r.name })),
       });
@@ -315,6 +327,7 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
             'events.message',
             'events.severity',
             'events.host',
+            'events.source_ip',
             'events.program',
             'events.service',
             'events.trace_id',

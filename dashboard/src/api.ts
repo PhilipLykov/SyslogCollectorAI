@@ -96,6 +96,7 @@ export interface LogEvent {
   message: string;
   severity?: string;
   host?: string;
+  source_ip?: string;
   service?: string;
   program?: string;
   facility?: string;
@@ -481,6 +482,7 @@ export interface EventScoreRecord {
   message: string;
   severity: string | null;
   host: string | null;
+  source_ip: string | null;
   program: string | null;
   criterion_slug: string;
   criterion_name: string;
@@ -561,6 +563,7 @@ export interface SearchEventsParams {
   system_id?: string;
   severity?: string;        // comma-separated
   host?: string;
+  source_ip?: string;
   program?: string;
   service?: string;
   trace_id?: string;
@@ -587,6 +590,7 @@ export async function searchEvents(params: SearchEventsParams): Promise<SearchEv
   if (params.system_id) qs.set('system_id', params.system_id);
   if (params.severity) qs.set('severity', params.severity);
   if (params.host) qs.set('host', params.host);
+  if (params.source_ip) qs.set('source_ip', params.source_ip);
   if (params.program) qs.set('program', params.program);
   if (params.service) qs.set('service', params.service);
   if (params.trace_id) qs.set('trace_id', params.trace_id);
@@ -602,6 +606,7 @@ export async function searchEvents(params: SearchEventsParams): Promise<SearchEv
 export interface EventFacets {
   severities: string[];
   hosts: string[];
+  source_ips: string[];
   programs: string[];
   systems: Array<{ id: string; name: string }>;
 }
