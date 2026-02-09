@@ -232,13 +232,17 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
       //   to computing from the record's model for legacy records
       const enrichedRecords = usage.map((r: any) => {
         const recordModel = r.model || currentModel;
-        // PostgreSQL decimal comes back as string — normalize to number
+        // PostgreSQL integer/bigint/decimal can arrive as strings — normalize
+        const tokenInput = Number(r.token_input) || 0;
+        const tokenOutput = Number(r.token_output) || 0;
         const storedCost = r.cost_estimate != null ? Number(r.cost_estimate) : null;
         const finalCost = (storedCost !== null && Number.isFinite(storedCost))
           ? storedCost
-          : estimateCost(r.token_input, r.token_output, recordModel);
+          : estimateCost(tokenInput, tokenOutput, recordModel);
         return {
           ...r,
+          token_input: tokenInput,
+          token_output: tokenOutput,
           model: recordModel,
           system_name: r.system_id ? (systemNames[r.system_id] ?? 'Unknown') : null,
           cost_estimate: finalCost,

@@ -84,22 +84,28 @@ export async function askQuestion(
   // Place question in a clearly delimited block to reduce injection surface
   const userContent = `<context>\n${context}\n</context>\n\n<question>\n${sanitized}\n</question>`;
 
-  const res = await fetch(`${baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userContent },
-      ],
-      temperature: 0.3,
-      max_tokens: 500,
-    }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userContent },
+        ],
+        temperature: 0.3,
+        max_tokens: 500,
+      }),
+    });
+  } catch (netErr: any) {
+    console.error(`[${localTimestamp()}] RAG LLM network error: ${netErr.message}`);
+    throw new Error('Failed to reach the AI service. Please check network and base URL configuration.');
+  }
 
   if (!res.ok) {
     // Don't leak raw error details to the client
@@ -108,7 +114,13 @@ export async function askQuestion(
     throw new Error('Failed to process your question. Please try again later.');
   }
 
-  const data = await res.json() as any;
+  let data: any;
+  try {
+    data = await res.json();
+  } catch {
+    console.error(`[${localTimestamp()}] RAG LLM returned invalid JSON`);
+    throw new Error('Failed to process your question. Please try again later.');
+  }
   const answer = data.choices?.[0]?.message?.content ?? 'Unable to generate an answer.';
 
   console.log(`[${localTimestamp()}] RAG query answered (context=${metaRows.length} windows)`);

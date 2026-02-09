@@ -6,7 +6,7 @@ import {
   fetchRagHistory,
   clearRagHistory,
 } from '../api';
-import { EuDateInput, euToIso, isoToEu } from './EuDateInput';
+import { EuDateInput, euToIso } from './EuDateInput';
 
 // ── EU date format helper (with seconds, for display) ────────
 

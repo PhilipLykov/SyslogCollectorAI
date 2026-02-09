@@ -26,11 +26,14 @@ export const MODEL_PRICING: Record<string, { input: number; output: number }> = 
  * Returns null if the model is unknown (not in the pricing table).
  */
 export function estimateCost(
-  tokenInput: number,
-  tokenOutput: number,
+  tokenInput: number | string,
+  tokenOutput: number | string,
   model: string,
 ): number | null {
   const pricing = MODEL_PRICING[model];
   if (!pricing) return null;
-  return (tokenInput * pricing.input + tokenOutput * pricing.output) / 1_000_000;
+  // Defensive: PG driver may return numeric columns as strings
+  const input = Number(tokenInput) || 0;
+  const output = Number(tokenOutput) || 0;
+  return (input * pricing.input + output * pricing.output) / 1_000_000;
 }

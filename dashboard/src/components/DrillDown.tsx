@@ -427,7 +427,7 @@ export function DrillDown({ system, onBack, onAuthError }: DrillDownProps) {
                 Resolved{resolvedFindings.length > 0 && <span className="findings-tab-count">{resolvedFindings.length}</span>}
               </button>
             </div>
-            {openFindings.length > 0 && (
+            {findingsTab === 'open' && openFindings.length > 0 && (
               <button
                 className="btn btn-xs btn-ack"
                 onClick={handleAckAllFindings}

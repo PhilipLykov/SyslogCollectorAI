@@ -61,6 +61,11 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
         return reply.code(400).send({ error: '"question" is required.' });
       }
 
+      // Validate system_id format if provided (OWASP A03 — injection prevention)
+      if (system_id && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(system_id)) {
+        return reply.code(400).send({ error: 'system_id must be a valid UUID.' });
+      }
+
       try {
         const result = await askQuestion(db, question, { systemId: system_id, from, to });
 
@@ -95,6 +100,9 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
 
   // ── RAG history ──────────────────────────────────────────────
 
+  // UUID v4 format regex for input validation
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
   /** GET /api/v1/ask/history — list persisted Q&A entries */
   app.get<{ Querystring: { system_id?: string; limit?: string } }>(
     '/api/v1/ask/history',
@@ -104,17 +112,26 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
       const rawLimit = Number(request.query.limit ?? 50);
       const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(1, rawLimit), 200) : 50;
 
-      let query = db('rag_history')
-        .orderBy('created_at', 'desc')
-        .limit(limit)
-        .select('*');
-
-      if (system_id) {
-        query = query.where({ system_id });
+      if (system_id && !UUID_RE.test(system_id)) {
+        return reply.code(400).send({ error: 'system_id must be a valid UUID.' });
       }
 
-      const rows = await query;
-      return reply.send(rows);
+      try {
+        let query = db('rag_history')
+          .orderBy('created_at', 'desc')
+          .limit(limit)
+          .select('*');
+
+        if (system_id) {
+          query = query.where({ system_id });
+        }
+
+        const rows = await query;
+        return reply.send(rows);
+      } catch (err: any) {
+        app.log.error(`[${localTimestamp()}] Failed to fetch RAG history: ${err.message}`);
+        return reply.code(500).send({ error: 'Failed to fetch history.' });
+      }
     },
   );
 
@@ -124,13 +141,23 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
     { preHandler: requireAuth('admin') },
     async (request, reply) => {
       const { system_id } = request.query;
-      let query = db('rag_history');
-      if (system_id) {
-        query = query.where({ system_id });
+
+      if (system_id && !UUID_RE.test(system_id)) {
+        return reply.code(400).send({ error: 'system_id must be a valid UUID.' });
       }
-      const deleted = await query.del();
-      app.log.info(`[${localTimestamp()}] RAG history cleared: ${deleted} entries${system_id ? ` (system ${system_id})` : ''}`);
-      return reply.send({ deleted });
+
+      try {
+        let query = db('rag_history');
+        if (system_id) {
+          query = query.where({ system_id });
+        }
+        const deleted = await query.del();
+        app.log.info(`[${localTimestamp()}] RAG history cleared: ${deleted} entries${system_id ? ` (system ${system_id})` : ''}`);
+        return reply.send({ deleted });
+      } catch (err: any) {
+        app.log.error(`[${localTimestamp()}] Failed to clear RAG history: ${err.message}`);
+        return reply.code(500).send({ error: 'Failed to clear history.' });
+      }
     },
   );
 

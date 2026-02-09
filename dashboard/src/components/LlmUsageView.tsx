@@ -17,8 +17,10 @@ function formatCost(raw: number | string | null | undefined): string {
   return `$${cost.toFixed(2)}`;
 }
 
-function formatTokens(count: number | null): string {
-  if (count === null || count === undefined || !Number.isFinite(count)) return '—';
+function formatTokens(raw: number | string | null | undefined): string {
+  if (raw === null || raw === undefined) return '—';
+  const count = typeof raw === 'string' ? Number(raw) : raw;
+  if (!Number.isFinite(count)) return '—';
   if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(2)}M`;
   if (count >= 1_000) return `${(count / 1_000).toFixed(1)}K`;
   return String(count);
@@ -218,8 +220,8 @@ export function LlmUsageView({ onAuthError }: LlmUsageViewProps) {
                   <td className="usage-system">{r.system_name ?? '—'}</td>
                   <td className="usage-model">{r.model}</td>
                   <td className="col-num">{r.event_count}</td>
-                  <td className="col-num">{r.token_input.toLocaleString()}</td>
-                  <td className="col-num">{r.token_output.toLocaleString()}</td>
+                  <td className="col-num">{Number(r.token_input || 0).toLocaleString()}</td>
+                  <td className="col-num">{Number(r.token_output || 0).toLocaleString()}</td>
                   <td className="col-num">{r.request_count}</td>
                   <td className="col-num col-cost">{formatCost(r.cost_estimate)}</td>
                 </tr>

@@ -37,7 +37,7 @@ function formatEuDate(iso: string): string {
   }
 }
 
-// todayStart / todayEnd / yearStart / now helpers imported from EuDateInput
+// todayStartEu / todayEndEu / yearStartEu / nowEu helpers imported from EuDateInput
 
 // ── Keyword highlighting ──────────────────────────────────────
 
@@ -79,8 +79,8 @@ export function EventExplorerView({ onAuthError }: Props) {
   const [severityFilter, setSeverityFilter] = useState('');
   const [hostFilter, setHostFilter] = useState('');
   const [programFilter, setProgramFilter] = useState('');
-  const [fromDate, setFromDate] = useState(todayStartEu);
-  const [toDate, setToDate] = useState(todayEndEu);
+  const [fromDate, setFromDate] = useState(todayStartEu());
+  const [toDate, setToDate] = useState(todayEndEu());
   const [sortBy, setSortBy] = useState('timestamp');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [page, setPage] = useState(1);
@@ -103,8 +103,8 @@ export function EventExplorerView({ onAuthError }: Props) {
   // ── Acknowledge panel ──────────────────────────────────
   const [showAckPanel, setShowAckPanel] = useState(false);
   const [ackSystem, setAckSystem] = useState('');
-  const [ackFrom, setAckFrom] = useState(yearStartEu);
-  const [ackTo, setAckTo] = useState(nowEu);
+  const [ackFrom, setAckFrom] = useState(yearStartEu());
+  const [ackTo, setAckTo] = useState(nowEu());
   const [acking, setAcking] = useState(false);
   const [ackMsg, setAckMsg] = useState('');
   const [ackError, setAckError] = useState('');
@@ -256,8 +256,8 @@ export function EventExplorerView({ onAuthError }: Props) {
     setSeverityFilter('');
     setHostFilter('');
     setProgramFilter('');
-    setFromDate(todayStart());
-    setToDate(todayEnd());
+    setFromDate(todayStartEu());
+    setToDate(todayEndEu());
     setSortBy('timestamp');
     setSortDir('desc');
     setPage(1);
