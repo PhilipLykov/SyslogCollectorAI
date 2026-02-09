@@ -6,6 +6,7 @@ import { LoginForm } from './components/LoginForm';
 import { SettingsView } from './components/SettingsView';
 import { LlmUsageView } from './components/LlmUsageView';
 import { EventExplorerView } from './components/EventExplorerView';
+import { AskAiPanel } from './components/AskAiPanel';
 import './index.css';
 
 type View = 'dashboard' | 'settings' | 'ai-usage' | 'events';
@@ -224,6 +225,14 @@ export default function App() {
               />
             ))}
           </div>
+
+          {/* Ask AI — global context across all systems */}
+          {systems.length > 0 && (
+            <AskAiPanel
+              systems={systems}
+              onAuthError={handleLogout}
+            />
+          )}
         </>
       )}
     </div>

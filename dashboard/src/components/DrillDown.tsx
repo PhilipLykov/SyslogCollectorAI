@@ -14,6 +14,7 @@ import {
   reopenFinding,
 } from '../api';
 import { ScoreBars, CRITERIA_LABELS } from './ScoreBar';
+import { AskAiPanel } from './AskAiPanel';
 
 /** Auto-refresh interval for findings (ms). */
 const FINDINGS_POLL_INTERVAL = 60_000; // 60 seconds
@@ -317,6 +318,13 @@ export function DrillDown({ system, onBack, onAuthError }: DrillDownProps) {
           )}
         </div>
       )}
+
+      {/* ── Ask AI (system-scoped) ── */}
+      <AskAiPanel
+        fixedSystemId={system.id}
+        fixedSystemName={system.name}
+        onAuthError={onAuthError}
+      />
 
       {/* ── Persistent Findings panel ── */}
       {!loading && (

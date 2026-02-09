@@ -641,6 +641,27 @@ export async function traceEvents(params: {
   return apiFetch(`/api/v1/events/trace?${qs}`);
 }
 
+// ── Ask AI (RAG) ─────────────────────────────────────────────
+
+export interface AskAiParams {
+  question: string;
+  system_id?: string;
+  from?: string;
+  to?: string;
+}
+
+export interface AskAiResponse {
+  answer: string;
+  context_used: number;
+}
+
+export async function askAi(params: AskAiParams): Promise<AskAiResponse> {
+  return apiFetch('/api/v1/ask', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
 // ── Event Acknowledgement ────────────────────────────────────
 
 export interface AckEventsParams {
