@@ -16,6 +16,7 @@ import {
   isHigherSeverity,
   type OpenFinding,
 } from './findingDedup.js';
+import { loadPrivacyFilterConfig, filterMetaEventForLlm } from '../llm/llmPrivacyFilter.js';
 
 const DEFAULT_W_META = 0.7;
 /** Number of previous window summaries to include as context. */
@@ -208,6 +209,10 @@ export async function metaAnalyzeWindow(
       occurrenceCount: g.count,
     };
   });
+
+  // ── Privacy filtering ──────────────────────────────────────
+  const privacyConfig = await loadPrivacyFilterConfig(db);
+  eventsForLlm = eventsForLlm.map((e) => filterMetaEventForLlm(e, privacyConfig));
 
   // ── High-score prioritisation ─────────────────────────────
   // Sort by max score descending so the most important events are always

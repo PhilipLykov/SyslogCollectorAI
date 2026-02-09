@@ -6,6 +6,7 @@ import { type LlmAdapter, type ScoreResult } from '../llm/adapter.js';
 import { estimateCost } from '../llm/pricing.js';
 import { CRITERIA } from '../../types/index.js';
 import { resolveCustomPrompts } from '../llm/aiConfig.js';
+import { loadPrivacyFilterConfig, filterEventForLlm } from '../llm/llmPrivacyFilter.js';
 
 // ── Token Optimization config type ──────────────────────────
 export interface TokenOptimizationConfig {
@@ -288,15 +289,17 @@ export async function runPerEventScoringJob(
         const sources = await db('log_sources').where({ system_id: systemId }).select('label');
         const sourceLabels = sources.map((s: any) => s.label);
 
-        // Build events for LLM with message truncation (Strategy 4)
+        // Build events for LLM with message truncation (Strategy 4) and privacy filtering
+        const privacyConfig = await loadPrivacyFilterConfig(db);
         const eventsForLlm = systemBatch.map((r) => {
           const event = eventMap.get(r.representativeEventId);
-          return {
+          const raw = {
             message: truncateMessage(r.representativeMessage, opt.message_max_length),
             severity: event?.severity,
             host: event?.host,
             program: event?.program,
           };
+          return filterEventForLlm(raw, privacyConfig);
         });
 
         // Call LLM

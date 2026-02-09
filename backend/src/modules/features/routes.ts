@@ -7,6 +7,7 @@ import { askQuestion } from './rag.js';
 import { resolveAiConfig, resolveCustomPrompts, invalidateAiConfigCache } from '../llm/aiConfig.js';
 import { DEFAULT_SCORE_SYSTEM_PROMPT, DEFAULT_META_SYSTEM_PROMPT, DEFAULT_RAG_SYSTEM_PROMPT } from '../llm/adapter.js';
 import { runMaintenance, loadMaintenanceConfig } from '../maintenance/maintenanceJob.js';
+import { PRIVACY_FILTER_DEFAULTS, invalidatePrivacyFilterCache } from '../llm/llmPrivacyFilter.js';
 
 /**
  * Phase 7 feature routes: compliance export, RAG query, app config,
@@ -898,6 +899,292 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
         }
         app.log.error(`[${localTimestamp()}] Failed to fetch maintenance history: ${err.message}`);
         return reply.code(500).send({ error: 'Failed to fetch history.' });
+      }
+    },
+  );
+
+  // ── Privacy Settings ──────────────────────────────────────
+
+  /** GET /api/v1/privacy-config — return current privacy settings. */
+  app.get(
+    '/api/v1/privacy-config',
+    { preHandler: requireAuth('admin') },
+    async (_req, reply) => {
+      try {
+        const row = await db('app_config').where({ key: 'privacy_config' }).first('value');
+        let parsed: Record<string, unknown> = {};
+        if (row) {
+          const raw = typeof row.value === 'string' ? JSON.parse(row.value) : row.value;
+          if (raw && typeof raw === 'object') parsed = raw as Record<string, unknown>;
+        }
+        const config = { ...PRIVACY_FILTER_DEFAULTS, ...parsed };
+
+        // Ensure custom_patterns is always an array
+        if (!Array.isArray(config.custom_patterns)) {
+          config.custom_patterns = [];
+        }
+
+        return reply.send({ config, defaults: PRIVACY_FILTER_DEFAULTS });
+      } catch (err: any) {
+        app.log.error(`[${localTimestamp()}] Failed to fetch privacy config: ${err.message}`);
+        return reply.code(500).send({ error: 'Failed to fetch config.' });
+      }
+    },
+  );
+
+  /** PUT /api/v1/privacy-config — update privacy settings. */
+  app.put(
+    '/api/v1/privacy-config',
+    { preHandler: requireAuth('admin') },
+    async (request, reply) => {
+      const body = (request.body as any) ?? {};
+
+      // Validate rag_history_retention_days
+      if (body.rag_history_retention_days !== undefined) {
+        const v = Number(body.rag_history_retention_days);
+        if (!Number.isFinite(v) || v < 0 || v > 3650) {
+          return reply.code(400).send({ error: 'rag_history_retention_days must be 0–3650.' });
+        }
+      }
+
+      // Validate custom_patterns
+      if (body.custom_patterns !== undefined) {
+        if (!Array.isArray(body.custom_patterns)) {
+          return reply.code(400).send({ error: 'custom_patterns must be an array.' });
+        }
+        // Validate each pattern
+        for (let i = 0; i < body.custom_patterns.length; i++) {
+          const cp = body.custom_patterns[i];
+          if (!cp || typeof cp !== 'object') {
+            return reply.code(400).send({ error: `custom_patterns[${i}] must be an object.` });
+          }
+          if (!cp.pattern || typeof cp.pattern !== 'string') {
+            return reply.code(400).send({ error: `custom_patterns[${i}].pattern must be a non-empty string.` });
+          }
+          // Verify regex is valid
+          try {
+            new RegExp(cp.pattern, 'gi');
+          } catch {
+            return reply.code(400).send({ error: `custom_patterns[${i}].pattern is not a valid regex: "${cp.pattern}"` });
+          }
+          if (cp.replacement !== undefined && typeof cp.replacement !== 'string') {
+            return reply.code(400).send({ error: `custom_patterns[${i}].replacement must be a string.` });
+          }
+        }
+      }
+
+      try {
+        // Load existing config, merge with new values
+        const existing = await db('app_config').where({ key: 'privacy_config' }).first('value');
+        let current: Record<string, unknown> = { ...PRIVACY_FILTER_DEFAULTS };
+        if (existing) {
+          const raw = typeof existing.value === 'string' ? JSON.parse(existing.value) : existing.value;
+          if (raw && typeof raw === 'object') current = { ...current, ...(raw as Record<string, unknown>) };
+        }
+
+        // Only merge known keys
+        const allowedKeys = Object.keys(PRIVACY_FILTER_DEFAULTS);
+        for (const key of allowedKeys) {
+          if (body[key] !== undefined) {
+            current[key] = body[key];
+          }
+        }
+
+        await db.raw(`
+          INSERT INTO app_config (key, value) VALUES ('privacy_config', ?::jsonb)
+          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        `, [JSON.stringify(current)]);
+
+        // Invalidate cache so pipeline picks up changes
+        invalidatePrivacyFilterCache();
+
+        app.log.info(`[${localTimestamp()}] Privacy config updated`);
+
+        return reply.send({ config: current, defaults: PRIVACY_FILTER_DEFAULTS });
+      } catch (err: any) {
+        app.log.error(`[${localTimestamp()}] Failed to update privacy config: ${err.message}`);
+        return reply.code(500).send({ error: 'Failed to update config.' });
+      }
+    },
+  );
+
+  /** POST /api/v1/privacy/test-filter — test privacy filter against a sample message. */
+  app.post<{ Body: { message: string } }>(
+    '/api/v1/privacy/test-filter',
+    { preHandler: requireAuth('admin') },
+    async (request, reply) => {
+      const { message } = request.body ?? {} as any;
+      if (!message || typeof message !== 'string') {
+        return reply.code(400).send({ error: '"message" is required.' });
+      }
+
+      try {
+        // Import dynamically to get the latest config
+        const { loadPrivacyFilterConfig, filterText } = await import('../llm/llmPrivacyFilter.js');
+        const config = await loadPrivacyFilterConfig(db);
+        const filtered = filterText(message, config);
+
+        return reply.send({
+          original: message,
+          filtered,
+          filter_enabled: config.llm_filter_enabled,
+          changes_made: message !== filtered,
+        });
+      } catch (err: any) {
+        return reply.code(500).send({ error: `Test failed: ${err.message}` });
+      }
+    },
+  );
+
+  // ── Bulk Event Deletion (protected) ───────────────────────
+
+  /**
+   * POST /api/v1/events/bulk-delete — delete all events for a specified period.
+   * Requires body.confirmation === "YES" to proceed.
+   */
+  app.post<{
+    Body: {
+      confirmation: string;
+      from?: string;
+      to?: string;
+      system_id?: string;
+    };
+  }>(
+    '/api/v1/events/bulk-delete',
+    { preHandler: requireAuth('admin') },
+    async (request, reply) => {
+      const { confirmation, from, to, system_id } = request.body ?? {} as any;
+
+      // ── Safety checks ──────────────────────────────────────
+      if (confirmation !== 'YES') {
+        return reply.code(400).send({
+          error: 'Confirmation required. Send confirmation: "YES" to proceed with deletion.',
+        });
+      }
+
+      if (!from && !to && !system_id) {
+        return reply.code(400).send({
+          error: 'At least one filter is required (from, to, or system_id). To delete all events use the data retention settings.',
+        });
+      }
+
+      // Validate dates if provided
+      if (from && isNaN(Date.parse(from))) {
+        return reply.code(400).send({ error: '"from" must be a valid ISO date string.' });
+      }
+      if (to && isNaN(Date.parse(to))) {
+        return reply.code(400).send({ error: '"to" must be a valid ISO date string.' });
+      }
+
+      // Validate system_id if provided
+      const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (system_id && !UUID_RE.test(system_id)) {
+        return reply.code(400).send({ error: 'system_id must be a valid UUID.' });
+      }
+
+      try {
+        // First count how many events will be affected
+        let countQuery = db('events');
+        if (from) countQuery = countQuery.where('timestamp', '>=', from);
+        if (to) countQuery = countQuery.where('timestamp', '<=', to);
+        if (system_id) countQuery = countQuery.where({ system_id });
+
+        const countResult = await countQuery.count('id as cnt').first();
+        const eventCount = Number(countResult?.cnt ?? 0);
+
+        if (eventCount === 0) {
+          return reply.send({ deleted_events: 0, deleted_scores: 0, message: 'No events matched the specified criteria.' });
+        }
+
+        // Delete in batches to avoid long locks
+        let totalEventsDeleted = 0;
+        let totalScoresDeleted = 0;
+
+        let hasMore = true;
+        while (hasMore) {
+          let idQuery = db('events').limit(1000);
+          if (from) idQuery = idQuery.where('timestamp', '>=', from);
+          if (to) idQuery = idQuery.where('timestamp', '<=', to);
+          if (system_id) idQuery = idQuery.where({ system_id });
+
+          const eventIds = await idQuery.pluck('id');
+
+          if (eventIds.length === 0) {
+            hasMore = false;
+            break;
+          }
+
+          // Delete event_scores first
+          for (let i = 0; i < eventIds.length; i += 500) {
+            const chunk = eventIds.slice(i, i + 500);
+            const scoresDeleted = await db('event_scores').whereIn('event_id', chunk).del();
+            totalScoresDeleted += scoresDeleted;
+          }
+
+          // Delete events
+          const eventsDeleted = await db('events').whereIn('id', eventIds).del();
+          totalEventsDeleted += eventsDeleted;
+
+          if (eventIds.length < 1000) {
+            hasMore = false;
+          }
+        }
+
+        app.log.info(
+          `[${localTimestamp()}] Bulk event deletion: ${totalEventsDeleted} events, ${totalScoresDeleted} scores deleted ` +
+          `(from=${from ?? 'any'}, to=${to ?? 'any'}, system_id=${system_id ?? 'all'})`,
+        );
+
+        return reply.send({
+          deleted_events: totalEventsDeleted,
+          deleted_scores: totalScoresDeleted,
+          message: `Successfully deleted ${totalEventsDeleted} events and ${totalScoresDeleted} associated scores.`,
+        });
+      } catch (err: any) {
+        app.log.error(`[${localTimestamp()}] Bulk event deletion failed: ${err.message}`);
+        return reply.code(500).send({ error: `Deletion failed: ${err.message}` });
+      }
+    },
+  );
+
+  /** POST /api/v1/privacy/purge-rag-history — delete all RAG history. */
+  app.post<{ Body: { confirmation: string } }>(
+    '/api/v1/privacy/purge-rag-history',
+    { preHandler: requireAuth('admin') },
+    async (request, reply) => {
+      const { confirmation } = request.body ?? {} as any;
+      if (confirmation !== 'YES') {
+        return reply.code(400).send({ error: 'Confirmation required. Send confirmation: "YES".' });
+      }
+
+      try {
+        const deleted = await db('rag_history').del();
+        app.log.info(`[${localTimestamp()}] RAG history purged: ${deleted} entries`);
+        return reply.send({ deleted, message: `Deleted ${deleted} RAG history entries.` });
+      } catch (err: any) {
+        app.log.error(`[${localTimestamp()}] Failed to purge RAG history: ${err.message}`);
+        return reply.code(500).send({ error: 'Failed to purge RAG history.' });
+      }
+    },
+  );
+
+  /** POST /api/v1/privacy/purge-llm-usage — delete all LLM usage logs. */
+  app.post<{ Body: { confirmation: string } }>(
+    '/api/v1/privacy/purge-llm-usage',
+    { preHandler: requireAuth('admin') },
+    async (request, reply) => {
+      const { confirmation } = request.body ?? {} as any;
+      if (confirmation !== 'YES') {
+        return reply.code(400).send({ error: 'Confirmation required. Send confirmation: "YES".' });
+      }
+
+      try {
+        const deleted = await db('llm_usage').del();
+        app.log.info(`[${localTimestamp()}] LLM usage logs purged: ${deleted} entries`);
+        return reply.send({ deleted, message: `Deleted ${deleted} LLM usage log entries.` });
+      } catch (err: any) {
+        app.log.error(`[${localTimestamp()}] Failed to purge LLM usage: ${err.message}`);
+        return reply.code(500).send({ error: 'Failed to purge LLM usage logs.' });
       }
     },
   );

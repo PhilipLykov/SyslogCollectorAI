@@ -885,6 +885,92 @@ export async function fetchMaintenanceHistory(limit?: number): Promise<Maintenan
   return apiFetch(`/api/v1/maintenance/history${qs}`);
 }
 
+// ── Privacy Settings ─────────────────────────────────────────
+
+export interface CustomFilterPattern {
+  pattern: string;
+  replacement: string;
+}
+
+export interface PrivacyFilterConfig {
+  llm_filter_enabled: boolean;
+  filter_ipv4: boolean;
+  filter_ipv6: boolean;
+  filter_email: boolean;
+  filter_phone: boolean;
+  filter_urls: boolean;
+  filter_user_paths: boolean;
+  filter_mac_addresses: boolean;
+  filter_credit_cards: boolean;
+  strip_host_field: boolean;
+  strip_program_field: boolean;
+  custom_patterns: CustomFilterPattern[];
+  log_llm_requests: boolean;
+  rag_history_retention_days: number;
+}
+
+export interface PrivacyConfigResponse {
+  config: PrivacyFilterConfig;
+  defaults: PrivacyFilterConfig;
+}
+
+export async function fetchPrivacyConfig(): Promise<PrivacyConfigResponse> {
+  return apiFetch('/api/v1/privacy-config');
+}
+
+export async function updatePrivacyConfig(data: Partial<PrivacyFilterConfig>): Promise<PrivacyConfigResponse> {
+  return apiFetch('/api/v1/privacy-config', {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+export interface FilterTestResult {
+  original: string;
+  filtered: string;
+  filter_enabled: boolean;
+  changes_made: boolean;
+}
+
+export async function testPrivacyFilter(message: string): Promise<FilterTestResult> {
+  return apiFetch('/api/v1/privacy/test-filter', {
+    method: 'POST',
+    body: JSON.stringify({ message }),
+  });
+}
+
+export interface BulkDeleteResult {
+  deleted_events: number;
+  deleted_scores: number;
+  message: string;
+}
+
+export async function bulkDeleteEvents(params: {
+  confirmation: string;
+  from?: string;
+  to?: string;
+  system_id?: string;
+}): Promise<BulkDeleteResult> {
+  return apiFetch('/api/v1/events/bulk-delete', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+export async function purgeRagHistory(confirmation: string): Promise<{ deleted: number; message: string }> {
+  return apiFetch('/api/v1/privacy/purge-rag-history', {
+    method: 'POST',
+    body: JSON.stringify({ confirmation }),
+  });
+}
+
+export async function purgeLlmUsage(confirmation: string): Promise<{ deleted: number; message: string }> {
+  return apiFetch('/api/v1/privacy/purge-llm-usage', {
+    method: 'POST',
+    body: JSON.stringify({ confirmation }),
+  });
+}
+
 /**
  * Validate an API key against the backend.
  * Returns true if valid, false if 401/403.

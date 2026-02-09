@@ -17,12 +17,13 @@ import { ConfirmDialog } from './ConfirmDialog';
 import { AiConfigSection } from './AiConfigSection';
 import { NotificationsSection } from './NotificationsSection';
 import { DatabaseMaintenanceSection } from './DatabaseMaintenanceSection';
+import { PrivacySection } from './PrivacySection';
 
 interface SettingsViewProps {
   onAuthError: () => void;
 }
 
-type SettingsTab = 'systems' | 'ai-model' | 'notifications' | 'database';
+type SettingsTab = 'systems' | 'ai-model' | 'notifications' | 'database' | 'privacy';
 
 type Modal =
   | { kind: 'create-system' }
@@ -238,6 +239,14 @@ export function SettingsView({ onAuthError }: SettingsViewProps) {
         >
           Database
         </button>
+        <button
+          className={`settings-tab${activeTab === 'privacy' ? ' active' : ''}`}
+          onClick={() => setActiveTab('privacy')}
+          role="tab"
+          aria-selected={activeTab === 'privacy'}
+        >
+          Privacy
+        </button>
       </div>
 
       {/* ── Tab content ── */}
@@ -247,6 +256,8 @@ export function SettingsView({ onAuthError }: SettingsViewProps) {
         <NotificationsSection onAuthError={onAuthError} />
       ) : activeTab === 'database' ? (
         <DatabaseMaintenanceSection onAuthError={onAuthError} />
+      ) : activeTab === 'privacy' ? (
+        <PrivacySection onAuthError={onAuthError} />
       ) : (
         /* ── Systems & Sources tab (existing content) ── */
         <>

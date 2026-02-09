@@ -3862,3 +3862,263 @@ tr.event-row-acked:hover {
   color: var(--text-muted);
   font-size: 0.85rem;
 }
+
+/* ── Privacy Section ──────────────────────────────────────────── */
+
+.privacy-section {
+  padding: 8px 0;
+}
+
+.privacy-section .section-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.privacy-section .section-desc {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-bottom: 20px;
+  line-height: 1.5;
+}
+
+.privacy-block {
+  margin-bottom: 12px;
+  padding: 12px 16px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.privacy-master-toggle {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.privacy-toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.privacy-toggle-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.privacy-filters-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.privacy-filter-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.privacy-filter-item:hover {
+  border-color: var(--accent);
+}
+
+.privacy-filter-item input[type="checkbox"] {
+  margin-top: 2px;
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.privacy-filter-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.privacy-filter-name {
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+
+.privacy-filter-desc {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.privacy-filter-example {
+  font-size: 0.72rem;
+  color: var(--accent);
+  background: rgba(37, 99, 235, 0.06);
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-top: 2px;
+  display: inline-block;
+}
+
+.privacy-field-strip {
+  margin-top: 10px;
+}
+
+.privacy-custom-patterns {
+  margin-top: 10px;
+}
+
+.privacy-pattern-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.privacy-pattern-input {
+  flex: 2;
+  font-family: 'Fira Code', 'Consolas', monospace;
+  font-size: 0.85rem;
+}
+
+.privacy-pattern-replacement {
+  flex: 1;
+  font-family: 'Fira Code', 'Consolas', monospace;
+  font-size: 0.85rem;
+}
+
+.privacy-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+  margin-bottom: 8px;
+}
+
+.privacy-test-section {
+  margin-top: 10px;
+}
+
+.privacy-test-input {
+  width: 100%;
+  font-family: 'Fira Code', 'Consolas', monospace;
+  font-size: 0.85rem;
+}
+
+.privacy-test-result {
+  margin-top: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.privacy-test-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.privacy-test-text {
+  display: block;
+  font-size: 0.85rem;
+  word-break: break-all;
+  white-space: pre-wrap;
+  padding: 6px 10px;
+  background: var(--bg);
+  border-radius: 4px;
+}
+
+.privacy-test-changed {
+  background: rgba(34, 197, 94, 0.08);
+  border: 1px solid rgba(34, 197, 94, 0.2);
+}
+
+.privacy-test-warn {
+  margin-top: 8px;
+  font-size: 0.82rem;
+  color: var(--warning, #b45309);
+  font-style: italic;
+}
+
+.privacy-data-settings {
+  margin-top: 10px;
+}
+
+/* Danger zone styling */
+
+.privacy-danger-zone {
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+.privacy-danger-warning {
+  padding: 10px 14px;
+  background: rgba(239, 68, 68, 0.06);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  color: var(--danger, #dc2626);
+  margin-bottom: 14px;
+  line-height: 1.5;
+}
+
+.privacy-bulk-delete,
+.privacy-purge-section {
+  margin-top: 10px;
+}
+
+.privacy-delete-filters {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.privacy-delete-filters .form-group {
+  margin-bottom: 0;
+}
+
+.privacy-confirm-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.privacy-confirm-field label {
+  font-size: 0.88rem;
+}
+
+.privacy-confirm-field input {
+  border: 2px solid rgba(239, 68, 68, 0.4);
+  border-radius: 4px;
+  padding: 6px 10px;
+}
+
+.privacy-delete-result {
+  margin-top: 10px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  font-size: 0.88rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.privacy-delete-result-success {
+  background: rgba(34, 197, 94, 0.08);
+  border-color: rgba(34, 197, 94, 0.3);
+  color: #16a34a;
+}
+
+.privacy-purge-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
