@@ -7,6 +7,8 @@ import {
   fetchTokenOptConfig, updateTokenOptConfig, invalidateScoreCache,
   type MetaAnalysisConfig, type MetaAnalysisConfigResponse,
   fetchMetaAnalysisConfig, updateMetaAnalysisConfig,
+  type CriterionGuidelinesResponse,
+  fetchCriterionGuidelines, updateCriterionGuidelines,
 } from '../api';
 
 interface AiConfigSectionProps {
@@ -69,16 +71,27 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
   const [metaSuccess, setMetaSuccess] = useState('');
   const [metaError, setMetaError] = useState('');
 
+  // Criterion guidelines state
+  const [guidelinesData, setGuidelinesData] = useState<CriterionGuidelinesResponse | null>(null);
+  const [guideEdits, setGuideEdits] = useState<Record<string, string>>({});
+  const [showGuidelines, setShowGuidelines] = useState(false);
+  const [expandedCriterion, setExpandedCriterion] = useState<string | null>(null);
+  const [savingGuide, setSavingGuide] = useState(false);
+  const [guideSuccess, setGuideSuccess] = useState('');
+  const [guideError, setGuideError] = useState('');
+  const [showPromptPreview, setShowPromptPreview] = useState(false);
+
   const load = useCallback(async () => {
     try {
       setLoading(true);
       setError('');
-      const [data, prompts, ack, tok, meta] = await Promise.all([
+      const [data, prompts, ack, tok, meta, guides] = await Promise.all([
         fetchAiConfig(),
         fetchAiPrompts(),
         fetchAckConfig(),
         fetchTokenOptConfig(),
         fetchMetaAnalysisConfig(),
+        fetchCriterionGuidelines(),
       ]);
       setConfig(data);
       setModel(data.model);
@@ -96,6 +109,13 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
       setTokCfg(tok.config);
       setMetaAnalysis(meta);
       setMetaCfg(meta.config);
+      setGuidelinesData(guides);
+      // Initialize edits from current values
+      const edits: Record<string, string> = {};
+      for (const [slug, info] of Object.entries(guides.guidelines)) {
+        edits[slug] = info.current;
+      }
+      setGuideEdits(edits);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('Authentication')) { onAuthError(); return; }
@@ -564,6 +584,239 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
                 This prompt is sent as the <code>system</code> message when a user asks a natural-language question
                 via the Ask Question feature. The user message includes context from recent meta-analysis results.
               </span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── Per-Criterion Scoring Guidelines ──────────── */}
+      <div className="ai-prompts-section">
+        <h3>Criterion Scoring Guidelines</h3>
+        <p className="ai-config-desc">
+          Each event is scored by the LLM against 6 criteria. These guidelines tell the LLM
+          exactly what to look for when scoring each criterion. Edit them independently to tune
+          scoring behaviour for your environment. Changes take effect on the next pipeline run.
+        </p>
+
+        {guideError && (
+          <div className="error-msg" role="alert">
+            {guideError}
+            <button className="error-dismiss" onClick={() => setGuideError('')} aria-label="Dismiss">&times;</button>
+          </div>
+        )}
+        {guideSuccess && (
+          <div className="success-msg" role="status">
+            {guideSuccess}
+            <button className="error-dismiss" onClick={() => setGuideSuccess('')} aria-label="Dismiss">&times;</button>
+          </div>
+        )}
+
+        <div className="prompt-block">
+          <button
+            type="button"
+            className="prompt-toggle"
+            onClick={() => setShowGuidelines((v) => !v)}
+          >
+            <span className={`prompt-chevron${showGuidelines ? ' open' : ''}`}>&#9654;</span>
+            Scoring Guidelines per Criterion
+            {guidelinesData && Object.values(guidelinesData.guidelines).some((g) => g.is_custom) && (
+              <span className="prompt-custom-badge">custom</span>
+            )}
+          </button>
+
+          {showGuidelines && guidelinesData && (
+            <div className="prompt-editor tok-opt-editor">
+              <span className="form-hint" style={{ marginBottom: 12, display: 'block' }}>
+                The LLM receives a combined prompt that includes all 6 criterion guidelines below.
+                If you also set a custom <strong>Scoring System Prompt</strong> above, it overrides
+                these guidelines entirely (advanced use).
+              </span>
+
+              {Object.entries(guidelinesData.guidelines).map(([slug, info]) => {
+                const CRITERION_LABELS: Record<string, string> = {
+                  it_security: 'IT Security',
+                  performance_degradation: 'Performance Degradation',
+                  failure_prediction: 'Failure Prediction',
+                  anomaly: 'Anomaly / Unusual Patterns',
+                  compliance_audit: 'Compliance / Audit',
+                  operational_risk: 'Operational Risk',
+                };
+                const isExpanded = expandedCriterion === slug;
+                return (
+                  <fieldset key={slug} className="tok-opt-group">
+                    <legend
+                      style={{ cursor: 'pointer', userSelect: 'none' }}
+                      onClick={() => setExpandedCriterion(isExpanded ? null : slug)}
+                    >
+                      <span className={`prompt-chevron${isExpanded ? ' open' : ''}`} style={{ fontSize: '0.7em', marginRight: 6 }}>&#9654;</span>
+                      {CRITERION_LABELS[slug] ?? slug}
+                      {info.is_custom && <span className="prompt-custom-badge" style={{ marginLeft: 8 }}>custom</span>}
+                    </legend>
+
+                    {isExpanded && (
+                      <div style={{ marginTop: 8 }}>
+                        <textarea
+                          className="prompt-textarea"
+                          value={guideEdits[slug] ?? info.current}
+                          onChange={(e) => setGuideEdits((prev) => ({ ...prev, [slug]: e.target.value }))}
+                          rows={14}
+                          spellCheck={false}
+                        />
+                        <div className="prompt-editor-actions" style={{ marginTop: 6 }}>
+                          <button
+                            type="button"
+                            className="btn btn-sm"
+                            disabled={savingGuide}
+                            onClick={async () => {
+                              setSavingGuide(true);
+                              setGuideError('');
+                              setGuideSuccess('');
+                              try {
+                                const val = guideEdits[slug] ?? '';
+                                const isDefault = val.trim() === info.default_value.trim();
+                                const updated = await updateCriterionGuidelines({
+                                  [slug]: isDefault ? null : val,
+                                });
+                                setGuidelinesData(updated);
+                                const newEdits: Record<string, string> = {};
+                                for (const [s, g] of Object.entries(updated.guidelines)) {
+                                  newEdits[s] = g.current;
+                                }
+                                setGuideEdits(newEdits);
+                                setGuideSuccess(`${CRITERION_LABELS[slug] ?? slug} guideline saved.`);
+                              } catch (err: unknown) {
+                                const msg = err instanceof Error ? err.message : String(err);
+                                if (msg.includes('Authentication')) { onAuthError(); return; }
+                                setGuideError(msg);
+                              } finally {
+                                setSavingGuide(false);
+                              }
+                            }}
+                          >
+                            {savingGuide ? 'Saving…' : 'Save'}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-outline"
+                            disabled={savingGuide}
+                            onClick={async () => {
+                              if (!window.confirm(`Reset "${CRITERION_LABELS[slug] ?? slug}" guideline to the built-in default?`)) return;
+                              setSavingGuide(true);
+                              setGuideError('');
+                              setGuideSuccess('');
+                              try {
+                                const updated = await updateCriterionGuidelines({ [slug]: null });
+                                setGuidelinesData(updated);
+                                const newEdits: Record<string, string> = {};
+                                for (const [s, g] of Object.entries(updated.guidelines)) {
+                                  newEdits[s] = g.current;
+                                }
+                                setGuideEdits(newEdits);
+                                setGuideSuccess(`${CRITERION_LABELS[slug] ?? slug} guideline reset to default.`);
+                              } catch (err: unknown) {
+                                const msg = err instanceof Error ? err.message : String(err);
+                                if (msg.includes('Authentication')) { onAuthError(); return; }
+                                setGuideError(msg);
+                              } finally {
+                                setSavingGuide(false);
+                              }
+                            }}
+                          >
+                            Reset to Default
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </fieldset>
+                );
+              })}
+
+              {/* Save All / Reset All */}
+              <div className="prompt-editor-actions" style={{ marginTop: 8, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={savingGuide}
+                  onClick={async () => {
+                    setSavingGuide(true);
+                    setGuideError('');
+                    setGuideSuccess('');
+                    try {
+                      const payload: Record<string, string | null> = {};
+                      for (const [slug, info] of Object.entries(guidelinesData.guidelines)) {
+                        const val = guideEdits[slug] ?? '';
+                        const isDefault = val.trim() === info.default_value.trim();
+                        payload[slug] = isDefault ? null : val;
+                      }
+                      const updated = await updateCriterionGuidelines(payload);
+                      setGuidelinesData(updated);
+                      const newEdits: Record<string, string> = {};
+                      for (const [s, g] of Object.entries(updated.guidelines)) {
+                        newEdits[s] = g.current;
+                      }
+                      setGuideEdits(newEdits);
+                      setGuideSuccess('All criterion guidelines saved.');
+                    } catch (err: unknown) {
+                      const msg = err instanceof Error ? err.message : String(err);
+                      if (msg.includes('Authentication')) { onAuthError(); return; }
+                      setGuideError(msg);
+                    } finally {
+                      setSavingGuide(false);
+                    }
+                  }}
+                >
+                  {savingGuide ? 'Saving…' : 'Save All Guidelines'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-outline"
+                  disabled={savingGuide}
+                  onClick={async () => {
+                    if (!window.confirm('Reset ALL criterion guidelines to built-in defaults?')) return;
+                    setSavingGuide(true);
+                    setGuideError('');
+                    setGuideSuccess('');
+                    try {
+                      const payload: Record<string, null> = {};
+                      for (const slug of Object.keys(guidelinesData.guidelines)) {
+                        payload[slug] = null;
+                      }
+                      const updated = await updateCriterionGuidelines(payload);
+                      setGuidelinesData(updated);
+                      const newEdits: Record<string, string> = {};
+                      for (const [s, g] of Object.entries(updated.guidelines)) {
+                        newEdits[s] = g.current;
+                      }
+                      setGuideEdits(newEdits);
+                      setGuideSuccess('All guidelines reset to defaults.');
+                    } catch (err: unknown) {
+                      const msg = err instanceof Error ? err.message : String(err);
+                      if (msg.includes('Authentication')) { onAuthError(); return; }
+                      setGuideError(msg);
+                    } finally {
+                      setSavingGuide(false);
+                    }
+                  }}
+                >
+                  Reset All to Defaults
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-outline"
+                  onClick={() => setShowPromptPreview((v) => !v)}
+                >
+                  {showPromptPreview ? 'Hide' : 'Preview'} Assembled Prompt
+                </button>
+              </div>
+
+              {showPromptPreview && guidelinesData && (
+                <div className="criterion-prompt-preview">
+                  <h4 style={{ margin: '12px 0 6px' }}>Assembled Scoring Prompt (sent to LLM)</h4>
+                  <pre className="criterion-prompt-preview-text">
+                    {guidelinesData.assembled_prompt_preview}
+                  </pre>
+                </div>
+              )}
             </div>
           )}
         </div>

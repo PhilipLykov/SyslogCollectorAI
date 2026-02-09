@@ -295,6 +295,32 @@ export async function updateAiPrompts(data: {
   });
 }
 
+// ── Per-Criterion Scoring Guidelines ─────────────────────────
+
+export interface CriterionGuidelineInfo {
+  current: string;
+  default_value: string;
+  is_custom: boolean;
+}
+
+export interface CriterionGuidelinesResponse {
+  guidelines: Record<string, CriterionGuidelineInfo>;
+  assembled_prompt_preview: string;
+}
+
+export async function fetchCriterionGuidelines(): Promise<CriterionGuidelinesResponse> {
+  return apiFetch('/api/v1/ai-prompts/criterion-guidelines');
+}
+
+export async function updateCriterionGuidelines(
+  data: Record<string, string | null>,
+): Promise<CriterionGuidelinesResponse> {
+  return apiFetch('/api/v1/ai-prompts/criterion-guidelines', {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
 // ── Notification Channels ────────────────────────────────────
 
 export type ChannelType = 'webhook' | 'pushover' | 'ntfy' | 'gotify' | 'telegram';

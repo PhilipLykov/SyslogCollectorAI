@@ -5,7 +5,8 @@ import { extractTemplatesAndDedup, type TemplateRepresentative } from './dedup.j
 import { type LlmAdapter, type ScoreResult } from '../llm/adapter.js';
 import { estimateCost } from '../llm/pricing.js';
 import { CRITERIA } from '../../types/index.js';
-import { resolveCustomPrompts } from '../llm/aiConfig.js';
+import { resolveCustomPrompts, resolveCriterionGuidelines } from '../llm/aiConfig.js';
+import { buildScoringPrompt } from '../llm/adapter.js';
 import { loadPrivacyFilterConfig, filterEventForLlm } from '../llm/llmPrivacyFilter.js';
 
 // ── Token Optimization config type ──────────────────────────
@@ -106,7 +107,14 @@ export async function runPerEventScoringJob(
 
   // ── Load configs ─────────────────────────────────────────
   const customPrompts = await resolveCustomPrompts(db);
+  const criterionGuidelines = await resolveCriterionGuidelines(db);
   const opt = await loadTokenOptConfig(db);
+
+  // Assemble the effective scoring prompt:
+  // If the user set a full custom scoring prompt override, use it as-is.
+  // Otherwise, build the prompt from the base template + per-criterion guidelines.
+  const effectiveScoringPrompt = customPrompts.scoringSystemPrompt
+    ?? buildScoringPrompt(Object.keys(criterionGuidelines).length > 0 ? criterionGuidelines : undefined);
 
   const batchSize = Math.max(1, Math.min(opt.scoring_batch_size, 100));
 
@@ -308,7 +316,7 @@ export async function runPerEventScoringJob(
           eventsForLlm,
           system?.description ?? '',
           sourceLabels,
-          { systemPrompt: customPrompts.scoringSystemPrompt },
+          { systemPrompt: effectiveScoringPrompt },
         );
 
         totalTokenInput += usage.token_input;

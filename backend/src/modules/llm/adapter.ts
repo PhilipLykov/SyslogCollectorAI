@@ -84,22 +84,139 @@ export interface LlmAdapter {
 
 // ── Default system prompts (exported for UI display / reset) ─
 
-export const DEFAULT_SCORE_SYSTEM_PROMPT = `You are an expert IT log analyst. You will receive events from a specific monitored system along with its SYSTEM SPECIFICATION — a description that explains what the system does, its purpose, and what aspects are important. USE the system specification to contextualise every event: what is normal for this system, what is suspicious, what constitutes a real risk, and what can be safely ignored.
+/**
+ * Default per-criterion scoring guidelines.
+ * Each guideline gives the LLM detailed, industry-grade instructions
+ * on how to evaluate events for a specific criterion.
+ * These are independently editable via the UI.
+ */
+export const DEFAULT_CRITERION_GUIDELINES: Record<string, string> = {
+  it_security: `Score based on indicators of security threats:
+- Authentication failures: brute-force attempts, invalid credentials, repeated lockouts, credential stuffing patterns
+- Authorization violations: privilege escalation, access denied to restricted resources, unexpected sudo/root usage
+- Known attack signatures: SQL injection, XSS, path traversal, command injection, LDAP injection in logs (OWASP Top 10)
+- Suspicious network activity: port scanning, unusual outbound connections, connections to known-malicious IPs/domains
+- Malware indicators: suspicious file operations, unexpected process execution, known C2 communication patterns
+- Security configuration changes: firewall rule modifications, disabled audit logging, SSH key additions
+- Certificate/TLS issues: expired certificates, invalid chains, protocol downgrades, weak cipher negotiations
+- Data exfiltration indicators: unusually large data transfers, access to bulk records, unauthorized API usage
+Score 0.0 for routine successful authentications, normal TLS handshakes, standard authorized access.
+Score 0.3-0.5 for single failed login attempts, minor configuration changes, informational security events.
+Score 0.6-0.8 for repeated failures suggesting active probing, suspicious access patterns, configuration weakening.
+Score 0.9-1.0 for confirmed exploitation attempts, active breaches, or critical security control failures.`,
+
+  performance_degradation: `Score based on indicators of system slowness or resource exhaustion:
+- High latency: response times exceeding normal baselines, slow API calls, request timeouts
+- CPU exhaustion: sustained high CPU usage, CPU throttling, process starvation
+- Memory pressure: high memory utilization, swap usage, OOM (out of memory) kills, memory leak patterns
+- Disk I/O: slow disk operations, I/O wait, disk queue depth warnings
+- Connection/thread pools: pool exhaustion, connection refused errors, thread starvation
+- Garbage collection: long GC pauses, frequent full GC cycles, GC overhead limits
+- Network: bandwidth saturation, packet loss, high retransmission rates, DNS resolution delays
+- Database: slow queries, lock contention, replication lag, connection pool saturation
+- Queue backlogs: message processing delays, growing queue depth, consumer lag
+Score 0.0 for normal resource utilization well within thresholds.
+Score 0.3-0.5 for elevated but manageable resource usage, occasional slow queries.
+Score 0.6-0.8 for sustained degradation with measurable user impact, approaching resource limits.
+Score 0.9-1.0 for active performance crisis: services unresponsive, resources fully exhausted.`,
+
+  failure_prediction: `Score based on early warning signs that predict impending failures:
+- Disk space: approaching capacity (>80% usage), rapid fill rate
+- Error rate trends: gradually increasing error counts, even if not yet critical
+- Memory leaks: steadily growing memory usage across restarts, unreleased handles/connections
+- Hardware warnings: SMART disk errors, ECC memory corrections, temperature warnings, fan failures
+- Retry storms: increasing timeout/retry rates suggesting dependency degradation
+- Replication lag: growing database replication delay suggesting impending split-brain or failover
+- Certificate expiry: certificates approaching expiry (within 30 days)
+- Capacity warnings: connection counts approaching limits, storage quotas near threshold
+- Degradation patterns: recurring errors at increasing frequency that historically precede outages
+Score 0.0 for healthy steady-state metrics, no warning indicators.
+Score 0.3-0.5 for minor warnings worth monitoring but no immediate risk (e.g. disk at 60%).
+Score 0.6-0.8 for clear warning signs suggesting failure within days if unaddressed.
+Score 0.9-1.0 for imminent failures likely within hours (e.g. disk at 95%, accelerating memory leak).`,
+
+  anomaly: `Score based on deviation from normal/expected behavior for this specific system:
+- Temporal anomalies: activity at unusual times (e.g. batch jobs at wrong hours, admin access at 3 AM)
+- New/unknown patterns: processes, services, or error types never seen before on this system
+- Traffic anomalies: request volumes significantly above or below normal baseline
+- Behavioral shifts: sudden changes in log patterns, message frequency, or severity distribution
+- Geographic anomalies: access from unusual locations or IP ranges (if location context available)
+- Configuration drift: unexpected changes outside normal change windows or by unexpected actors
+- Service state changes: unexpected restarts, mode changes, or failovers without known maintenance
+- Data volume anomalies: unusually large or small data transfers, bulk operations at odd times
+Score 0.0 for expected, routine patterns consistent with normal system behavior.
+Score 0.3-0.5 for minor deviations that may be explained by normal variation.
+Score 0.6-0.8 for clearly unusual patterns that cannot be easily explained by routine operation.
+Score 0.9-1.0 for highly anomalous activity with no plausible benign explanation.`,
+
+  compliance_audit: `Score based on relevance to regulatory compliance, audit requirements, and governance:
+- Identity lifecycle: user account creation, modification, deletion, role changes
+- Access control: privilege grants/revocations, permission changes, group membership changes
+- Data access: access to sensitive/regulated data (PII, PHI, financial records, credentials)
+- Authentication records: login/logout events, MFA status changes, session management
+- Configuration changes: system settings with security or compliance implications
+- Data handling: backup operations, data exports, retention policy enforcement, deletion events
+- Policy enforcement: firewall rule changes, security policy updates, compliance scan results
+- Audit trail integrity: log tampering indicators, gap detection, time synchronization issues
+- Regulatory triggers: events relevant to GDPR, HIPAA, SOX, PCI-DSS, or industry-specific requirements
+Score 0.0 for routine events with no audit trail significance.
+Score 0.3-0.5 for standard operational events with minor compliance relevance (e.g. routine logins).
+Score 0.6-0.8 for events that should be recorded for audit purposes (privilege changes, data access).
+Score 0.9-1.0 for events requiring immediate compliance review or indicating policy violations.`,
+
+  operational_risk: `Score based on general service health, availability risk, and operational concerns:
+- Service availability: unplanned restarts, crash loops, health check failures, service flapping
+- Dependency health: failures in databases, caches, message queues, external APIs, DNS
+- Deployment events: version changes, rollbacks, failed deployments, configuration pushes
+- Infrastructure: hypervisor warnings, container runtime errors, orchestrator events, node issues
+- Backup/recovery: backup failures, restore operations, data integrity warnings
+- Load balancing: backend health changes, failover events, capacity redistribution
+- Network: routing changes, interface state changes, DNS failures, proxy errors
+- Operational procedures: scheduled maintenance events, manual interventions, emergency changes
+In containerized environments (Docker, Kubernetes): routine container lifecycle events (start/stop, image pulls, network bridge state changes, port transitions) are normal operations. Score these low unless there is evidence of actual disruption (restart loops >5 in 10 minutes, cascading failures, persistent network issues blocking real traffic).
+Score 0.0 for healthy operational status, routine lifecycle events.
+Score 0.3-0.5 for minor operational events (single restart, brief health check failure).
+Score 0.6-0.8 for events indicating degraded service or elevated risk to availability.
+Score 0.9-1.0 for active or imminent service disruption affecting users.`,
+};
+
+/**
+ * Base scoring system prompt template.
+ * The {CRITERION_GUIDELINES} placeholder is replaced with per-criterion instructions.
+ */
+export const SCORE_SYSTEM_PROMPT_TEMPLATE = `You are an expert IT log analyst. You will receive events from a specific monitored system along with its SYSTEM SPECIFICATION — a description that explains what the system does, its purpose, and what aspects are important. USE the system specification to contextualise every event: what is normal for this system, what is suspicious, what constitutes a real risk, and what can be safely ignored.
 
 Analyze each log event and return a JSON object with a "scores" key containing an array of objects, one per event.
 
 Each object must have exactly these 6 keys (float 0.0 to 1.0):
-- it_security: likelihood of security threat
-- performance_degradation: indicators of slowness, resource exhaustion
-- failure_prediction: signs of impending failure
-- anomaly: unusual patterns deviating from normal behavior
-- compliance_audit: relevance to compliance/audit
-- operational_risk: general service health risk
+
+{CRITERION_GUIDELINES}
 
 Example response for 2 events:
 {"scores": [{"it_security": 0.8, "performance_degradation": 0.1, "failure_prediction": 0.0, "anomaly": 0.3, "compliance_audit": 0.7, "operational_risk": 0.2}, {"it_security": 0.0, "performance_degradation": 0.6, "failure_prediction": 0.4, "anomaly": 0.1, "compliance_audit": 0.0, "operational_risk": 0.5}]}
 
 Return ONLY valid JSON with the "scores" array.`;
+
+/**
+ * Assemble the full scoring system prompt by combining the base template
+ * with per-criterion guidelines. Custom per-criterion overrides take
+ * precedence over defaults.
+ */
+export function buildScoringPrompt(criterionOverrides?: Record<string, string>): string {
+  const guidelines: string[] = [];
+  for (const slug of ['it_security', 'performance_degradation', 'failure_prediction', 'anomaly', 'compliance_audit', 'operational_risk']) {
+    const guide = criterionOverrides?.[slug] ?? DEFAULT_CRITERION_GUIDELINES[slug] ?? '';
+    guidelines.push(`=== ${slug} ===\n${guide}`);
+  }
+  return SCORE_SYSTEM_PROMPT_TEMPLATE.replace('{CRITERION_GUIDELINES}', guidelines.join('\n\n'));
+}
+
+/**
+ * Legacy constant — the fully assembled default scoring prompt.
+ * Used when the user hasn't set a custom scoring_system_prompt override
+ * AND no per-criterion overrides exist.
+ */
+export const DEFAULT_SCORE_SYSTEM_PROMPT = buildScoringPrompt();
 
 export const DEFAULT_META_SYSTEM_PROMPT = `You are an expert IT log analyst performing a meta-analysis of a batch of log events from a single monitored system over a time window. Your role is to act as a senior human analyst would: focus on what matters, ignore routine noise, and never duplicate work that is already tracked.
 

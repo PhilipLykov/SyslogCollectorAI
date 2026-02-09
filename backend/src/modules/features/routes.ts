@@ -5,8 +5,8 @@ import { requireAuth } from '../../middleware/auth.js';
 import { localTimestamp } from '../../config/index.js';
 import { generateComplianceExport, type ExportParams } from './exportCompliance.js';
 import { askQuestion } from './rag.js';
-import { resolveAiConfig, resolveCustomPrompts, invalidateAiConfigCache } from '../llm/aiConfig.js';
-import { DEFAULT_SCORE_SYSTEM_PROMPT, DEFAULT_META_SYSTEM_PROMPT, DEFAULT_RAG_SYSTEM_PROMPT } from '../llm/adapter.js';
+import { resolveAiConfig, resolveCustomPrompts, resolveCriterionGuidelines, invalidateAiConfigCache, invalidateCriterionGuidelinesCache } from '../llm/aiConfig.js';
+import { DEFAULT_SCORE_SYSTEM_PROMPT, DEFAULT_META_SYSTEM_PROMPT, DEFAULT_RAG_SYSTEM_PROMPT, DEFAULT_CRITERION_GUIDELINES, buildScoringPrompt } from '../llm/adapter.js';
 import { runMaintenance, loadMaintenanceConfig } from '../maintenance/maintenanceJob.js';
 import {
   loadBackupConfig,
@@ -424,6 +424,128 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
         default_scoring_system_prompt: DEFAULT_SCORE_SYSTEM_PROMPT,
         default_meta_system_prompt: DEFAULT_META_SYSTEM_PROMPT,
         default_rag_system_prompt: DEFAULT_RAG_SYSTEM_PROMPT,
+      });
+    },
+  );
+
+  // ── Per-criterion scoring guidelines ─────────────────────────
+  const CRITERION_SLUGS_LIST = [
+    'it_security', 'performance_degradation', 'failure_prediction',
+    'anomaly', 'compliance_audit', 'operational_risk',
+  ];
+  const CRITERION_GUIDE_PREFIX = 'criterion_guide_';
+  const MAX_GUIDE_LEN = 5000;
+
+  /**
+   * GET /api/v1/ai-prompts/criterion-guidelines
+   * Returns per-criterion scoring guidelines (current + defaults).
+   */
+  app.get(
+    '/api/v1/ai-prompts/criterion-guidelines',
+    { preHandler: requireAuth('admin') },
+    async (_req, reply) => {
+      const overrides = await resolveCriterionGuidelines(db);
+
+      const guidelines: Record<string, {
+        current: string;
+        default_value: string;
+        is_custom: boolean;
+      }> = {};
+
+      for (const slug of CRITERION_SLUGS_LIST) {
+        const custom = overrides[slug];
+        guidelines[slug] = {
+          current: custom ?? DEFAULT_CRITERION_GUIDELINES[slug] ?? '',
+          default_value: DEFAULT_CRITERION_GUIDELINES[slug] ?? '',
+          is_custom: !!custom,
+        };
+      }
+
+      // Also return the assembled prompt preview so the user can see what the LLM receives
+      const effectiveOverrides: Record<string, string> = {};
+      for (const slug of CRITERION_SLUGS_LIST) {
+        effectiveOverrides[slug] = overrides[slug] ?? DEFAULT_CRITERION_GUIDELINES[slug] ?? '';
+      }
+
+      return reply.send({
+        guidelines,
+        assembled_prompt_preview: buildScoringPrompt(effectiveOverrides),
+      });
+    },
+  );
+
+  /**
+   * PUT /api/v1/ai-prompts/criterion-guidelines
+   * Update one or more per-criterion scoring guidelines.
+   * Send null or empty string for a slug to reset it to the built-in default.
+   */
+  app.put(
+    '/api/v1/ai-prompts/criterion-guidelines',
+    { preHandler: requireAuth('admin') },
+    async (request, reply) => {
+      const body = request.body as Record<string, string | null | undefined> ?? {};
+
+      // Validate — only known criterion slugs
+      const updates: Array<{ slug: string; value: string | null }> = [];
+      for (const [key, val] of Object.entries(body)) {
+        if (!CRITERION_SLUGS_LIST.includes(key)) {
+          return reply.code(400).send({ error: `Unknown criterion slug: "${key}". Valid slugs: ${CRITERION_SLUGS_LIST.join(', ')}` });
+        }
+        if (val !== undefined && val !== null && val !== '') {
+          if (typeof val !== 'string') {
+            return reply.code(400).send({ error: `Guideline for "${key}" must be a string.` });
+          }
+          if (val.length > MAX_GUIDE_LEN) {
+            return reply.code(400).send({ error: `Guideline for "${key}" exceeds maximum length (${MAX_GUIDE_LEN} chars).` });
+          }
+        }
+        updates.push({ slug: key, value: (val && typeof val === 'string' && val.trim() !== '') ? val : null });
+      }
+
+      if (updates.length === 0) {
+        return reply.code(400).send({ error: 'Provide at least one criterion slug with a guideline value.' });
+      }
+
+      // Upsert or delete each guideline
+      for (const { slug, value } of updates) {
+        const dbKey = `${CRITERION_GUIDE_PREFIX}${slug}`;
+        if (value === null) {
+          await db('app_config').where({ key: dbKey }).del();
+        } else {
+          await db.raw(`
+            INSERT INTO app_config (key, value) VALUES (?, ?::jsonb)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+          `, [dbKey, JSON.stringify(value)]);
+        }
+      }
+
+      // Flush caches
+      invalidateAiConfigCache();
+      invalidateCriterionGuidelinesCache();
+
+      app.log.info(`[${localTimestamp()}] Criterion scoring guidelines updated: ${updates.map((u) => u.slug).join(', ')}`);
+
+      // Return updated state (same shape as GET)
+      const overrides = await resolveCriterionGuidelines(db);
+      const guidelines: Record<string, {
+        current: string;
+        default_value: string;
+        is_custom: boolean;
+      }> = {};
+      const effectiveOverrides: Record<string, string> = {};
+      for (const slug of CRITERION_SLUGS_LIST) {
+        const custom = overrides[slug];
+        guidelines[slug] = {
+          current: custom ?? DEFAULT_CRITERION_GUIDELINES[slug] ?? '',
+          default_value: DEFAULT_CRITERION_GUIDELINES[slug] ?? '',
+          is_custom: !!custom,
+        };
+        effectiveOverrides[slug] = overrides[slug] ?? DEFAULT_CRITERION_GUIDELINES[slug] ?? '';
+      }
+
+      return reply.send({
+        guidelines,
+        assembled_prompt_preview: buildScoringPrompt(effectiveOverrides),
       });
     },
   );

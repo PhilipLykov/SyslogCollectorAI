@@ -13,10 +13,32 @@ export interface AiConfig {
   baseUrl: string;
 }
 
-// In-memory cache — avoids hitting DB on every LLM call.
+export interface CustomPrompts {
+  /** Custom scoring system prompt. undefined = use built-in default. */
+  scoringSystemPrompt?: string;
+  /** Custom meta-analysis system prompt. undefined = use built-in default. */
+  metaSystemPrompt?: string;
+  /** Custom RAG (Ask Question) system prompt. undefined = use built-in default. */
+  ragSystemPrompt?: string;
+}
+
+/**
+ * Per-criterion guideline overrides.
+ * Keys are criterion slugs (it_security, performance_degradation, etc.)
+ * Values are custom guideline text. undefined = use built-in default.
+ */
+export type CriterionGuidelines = Partial<Record<string, string>>;
+
+// ── In-memory caches — avoid hitting DB on every LLM call ────
 let _cache: AiConfig | null = null;
 let _cacheTs = 0;
+let _promptCache: CustomPrompts | null = null;
+let _promptCacheTs = 0;
+let _guideCache: CriterionGuidelines | null = null;
+let _guideCacheTs = 0;
 const CACHE_TTL_MS = 30_000; // 30 seconds
+
+// ── AI Config resolution ─────────────────────────────────────
 
 /**
  * Resolve the current AI configuration.
@@ -51,27 +73,17 @@ export async function resolveAiConfig(db: Knex): Promise<AiConfig> {
   return _cache;
 }
 
-/** Flush the cache so next resolveAiConfig reads from DB. */
+/** Flush all caches so next resolve reads from DB. */
 export function invalidateAiConfigCache(): void {
   _cache = null;
   _cacheTs = 0;
   _promptCache = null;
   _promptCacheTs = 0;
+  _guideCache = null;
+  _guideCacheTs = 0;
 }
 
 // ── Custom system prompt resolution ─────────────────────────
-
-export interface CustomPrompts {
-  /** Custom scoring system prompt. undefined = use built-in default. */
-  scoringSystemPrompt?: string;
-  /** Custom meta-analysis system prompt. undefined = use built-in default. */
-  metaSystemPrompt?: string;
-  /** Custom RAG (Ask Question) system prompt. undefined = use built-in default. */
-  ragSystemPrompt?: string;
-}
-
-let _promptCache: CustomPrompts | null = null;
-let _promptCacheTs = 0;
 
 /**
  * Resolve custom system prompts from app_config.
@@ -101,4 +113,53 @@ export async function resolveCustomPrompts(db: Knex): Promise<CustomPrompts> {
   _promptCache = result;
   _promptCacheTs = now;
   return result;
+}
+
+// ── Per-criterion scoring guidelines ─────────────────────────
+
+const CRITERION_GUIDE_PREFIX = 'criterion_guide_';
+
+const CRITERION_SLUGS = [
+  'it_security',
+  'performance_degradation',
+  'failure_prediction',
+  'anomaly',
+  'compliance_audit',
+  'operational_risk',
+] as const;
+
+/**
+ * Resolve per-criterion guideline overrides from app_config.
+ * Returns only slugs that have custom overrides set.
+ */
+export async function resolveCriterionGuidelines(db: Knex): Promise<CriterionGuidelines> {
+  const now = Date.now();
+  if (_guideCache && now - _guideCacheTs < CACHE_TTL_MS) return _guideCache;
+
+  const keys = CRITERION_SLUGS.map((s) => `${CRITERION_GUIDE_PREFIX}${s}`);
+  const rows = await db('app_config')
+    .whereIn('key', keys)
+    .select('key', 'value');
+
+  const result: CriterionGuidelines = {};
+  for (const row of rows) {
+    let val = row.value;
+    if (typeof val === 'string') {
+      try { val = JSON.parse(val); } catch { /* use as-is */ }
+    }
+    if (typeof val === 'string' && val.trim() !== '') {
+      const slug = row.key.replace(CRITERION_GUIDE_PREFIX, '');
+      result[slug] = val;
+    }
+  }
+
+  _guideCache = result;
+  _guideCacheTs = now;
+  return result;
+}
+
+/** Invalidate the criterion guidelines cache. */
+export function invalidateCriterionGuidelinesCache(): void {
+  _guideCache = null;
+  _guideCacheTs = 0;
 }
