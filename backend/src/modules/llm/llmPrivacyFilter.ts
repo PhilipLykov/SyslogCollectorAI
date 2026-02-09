@@ -202,11 +202,12 @@ export function filterEventForLlm(
 /**
  * Apply privacy filter to a meta-analysis event object.
  * Returns a new object with filtered message field.
+ * Uses a generic to preserve the exact shape of the input object.
  */
-export function filterMetaEventForLlm(
-  event: { message: string; severity?: string; scores?: any; occurrenceCount?: number },
+export function filterMetaEventForLlm<T extends { message: string }>(
+  event: T,
   config: PrivacyFilterConfig,
-): { message: string; severity?: string; scores?: any; occurrenceCount?: number } {
+): T {
   if (!config.llm_filter_enabled) return event;
 
   return {

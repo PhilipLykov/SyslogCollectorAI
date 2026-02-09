@@ -18,7 +18,7 @@ import { localTimestamp } from '../../config/index.js';
 export interface FindingCandidate {
   text: string;
   severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
-  criterion?: string | null;
+  criterion?: string;
 }
 
 export interface OpenFinding {
