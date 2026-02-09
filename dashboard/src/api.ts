@@ -330,6 +330,84 @@ export async function deleteNotificationRule(id: string): Promise<void> {
   return apiFetch(`/api/v1/notification-rules/${id}`, { method: 'DELETE' });
 }
 
+// ── Alert History ────────────────────────────────────────────
+
+export interface AlertHistoryRecord {
+  id: string;
+  rule_id: string;
+  channel_id: string;
+  system_id: string;
+  window_id: string | null;
+  criterion_id: number | null;
+  state: 'firing' | 'resolved';
+  severity: string | null;
+  created_at: string;
+}
+
+export async function fetchAlertHistory(opts?: {
+  system_id?: string;
+  rule_id?: string;
+  state?: string;
+  from?: string;
+  to?: string;
+  limit?: number;
+}): Promise<AlertHistoryRecord[]> {
+  const params = new URLSearchParams();
+  if (opts?.system_id) params.set('system_id', opts.system_id);
+  if (opts?.rule_id) params.set('rule_id', opts.rule_id);
+  if (opts?.state) params.set('state', opts.state);
+  if (opts?.from) params.set('from', opts.from);
+  if (opts?.to) params.set('to', opts.to);
+  if (opts?.limit) params.set('limit', String(opts.limit));
+  return apiFetch(`/api/v1/alerts?${params}`);
+}
+
+// ── Silences ─────────────────────────────────────────────────
+
+export interface Silence {
+  id: string;
+  name: string | null;
+  starts_at: string;
+  ends_at: string;
+  scope: { global?: boolean; system_ids?: string[]; rule_ids?: string[] };
+  comment: string | null;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function fetchSilences(): Promise<Silence[]> {
+  return apiFetch('/api/v1/silences');
+}
+
+export async function createSilence(data: {
+  name?: string;
+  starts_at: string;
+  ends_at: string;
+  scope: { global?: boolean; system_ids?: string[]; rule_ids?: string[] };
+  comment?: string;
+}): Promise<Silence> {
+  return apiFetch('/api/v1/silences', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteSilence(id: string): Promise<void> {
+  return apiFetch(`/api/v1/silences/${id}`, { method: 'DELETE' });
+}
+
+// ── Scoring Criteria (static, matches backend CRITERIA) ──────
+
+export const CRITERIA = [
+  { id: 1, slug: 'it_security', name: 'IT Security' },
+  { id: 2, slug: 'performance_degradation', name: 'Performance Degradation' },
+  { id: 3, slug: 'failure_prediction', name: 'Failure Prediction' },
+  { id: 4, slug: 'anomaly', name: 'Anomaly / Unusual Patterns' },
+  { id: 5, slug: 'compliance_audit', name: 'Compliance / Audit Relevance' },
+  { id: 6, slug: 'operational_risk', name: 'Operational Risk / Service Health' },
+] as const;
+
 // ── LLM Usage ────────────────────────────────────────────────
 
 export interface LlmUsageRecord {

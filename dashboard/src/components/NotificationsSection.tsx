@@ -9,10 +9,15 @@ import {
   testNotificationChannel,
 } from '../api';
 import { ConfirmDialog } from './ConfirmDialog';
+import { AlertRulesPanel } from './AlertRulesPanel';
+import { AlertHistoryPanel } from './AlertHistoryPanel';
+import { SilencesPanel } from './SilencesPanel';
 
 interface NotificationsSectionProps {
   onAuthError: () => void;
 }
+
+type NotifSubTab = 'channels' | 'rules' | 'history' | 'silences';
 
 // ── Channel type metadata ────────────────────────────────────
 
@@ -66,6 +71,7 @@ type Modal =
   | null;
 
 export function NotificationsSection({ onAuthError }: NotificationsSectionProps) {
+  const [subTab, setSubTab] = useState<NotifSubTab>('rules');
   const [channels, setChannels] = useState<NotificationChannel[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -176,6 +182,52 @@ export function NotificationsSection({ onAuthError }: NotificationsSectionProps)
   // ── Render ────────────────────────────────────────────
   return (
     <div className="notif-section">
+      {/* ── Sub-pills navigation ── */}
+      <div className="notif-pills" role="tablist" aria-label="Notification sections">
+        <button
+          className={`notif-pill${subTab === 'rules' ? ' active' : ''}`}
+          onClick={() => setSubTab('rules')}
+          role="tab"
+          aria-selected={subTab === 'rules'}
+        >
+          Alert Rules
+        </button>
+        <button
+          className={`notif-pill${subTab === 'channels' ? ' active' : ''}`}
+          onClick={() => setSubTab('channels')}
+          role="tab"
+          aria-selected={subTab === 'channels'}
+        >
+          Channels
+        </button>
+        <button
+          className={`notif-pill${subTab === 'history' ? ' active' : ''}`}
+          onClick={() => setSubTab('history')}
+          role="tab"
+          aria-selected={subTab === 'history'}
+        >
+          History
+        </button>
+        <button
+          className={`notif-pill${subTab === 'silences' ? ' active' : ''}`}
+          onClick={() => setSubTab('silences')}
+          role="tab"
+          aria-selected={subTab === 'silences'}
+        >
+          Silences
+        </button>
+      </div>
+
+      {/* ── Sub-tab content ── */}
+      {subTab === 'rules' ? (
+        <AlertRulesPanel onAuthError={onAuthError} />
+      ) : subTab === 'history' ? (
+        <AlertHistoryPanel onAuthError={onAuthError} />
+      ) : subTab === 'silences' ? (
+        <SilencesPanel onAuthError={onAuthError} />
+      ) : (
+      /* ── Channels panel (inline, existing code) ── */
+      <>
       <div className="notif-header">
         <div>
           <h3>Notification Channels</h3>
@@ -297,6 +349,8 @@ export function NotificationsSection({ onAuthError }: NotificationsSectionProps)
           onCancel={() => setModal(null)}
           saving={saving}
         />
+      )}
+      </>
       )}
     </div>
   );
