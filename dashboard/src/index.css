@@ -334,6 +334,120 @@ input:focus-visible,
   margin-bottom: 24px;
 }
 
+.drill-down-score-hint {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+/* ── Clickable score rows ── */
+.score-row.clickable {
+  border-radius: var(--radius);
+  padding: 4px 8px;
+  margin: -4px -8px;
+  transition: background 0.15s;
+}
+.score-row.clickable:hover {
+  background: rgba(255,255,255,0.04);
+}
+.score-row.clickable.selected {
+  background: rgba(99, 102, 241, 0.12);
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+
+/* ── Criterion drill-down panel ── */
+.criterion-drilldown {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  margin-bottom: 24px;
+  animation: fadeSlideIn 0.2s ease-out;
+}
+
+@keyframes fadeSlideIn {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.criterion-drilldown-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.criterion-drilldown-header h4 {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--text);
+}
+
+.criterion-drilldown-name {
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.criterion-drilldown-empty {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  padding: 16px 0;
+  text-align: center;
+}
+
+/* ── Criterion events table ── */
+.criterion-events-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+.criterion-events-table th {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 2px solid var(--border);
+  color: var(--text-muted);
+  font-weight: 600;
+  white-space: nowrap;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.criterion-events-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.criterion-event-row:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.criterion-score-cell {
+  text-align: center;
+  white-space: nowrap;
+}
+
+.criterion-score-badge {
+  font-weight: 700;
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.criterion-message-cell {
+  max-width: 400px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.criterion-event-row:hover .criterion-message-cell {
+  white-space: normal;
+  word-break: break-word;
+}
+
 .recommended-action {
   margin-top: 8px;
   color: var(--orange);

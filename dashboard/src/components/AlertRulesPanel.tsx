@@ -123,7 +123,7 @@ export function AlertRulesPanel({ onAuthError }: AlertRulesPanelProps) {
         trigger_type: 'threshold' as const,
         trigger_config: triggerConfig,
         filters,
-        throttle_interval_seconds: data.throttleMinutes > 0 ? data.throttleMinutes * 60 : null,
+        throttle_interval_seconds: data.throttleMinutes > 0 ? data.throttleMinutes * 60 : undefined,
         send_recovery: data.sendRecovery,
         notify_only_on_state_change: data.onlyStateChange,
         enabled: true,

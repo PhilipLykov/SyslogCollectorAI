@@ -34,9 +34,13 @@ function scoreLevel(value: number): string {
 
 interface ScoreBarsProps {
   scores: Record<string, SystemScoreInfo>;
+  /** If provided, bars become clickable. Called with criterion slug. */
+  onCriterionClick?: (slug: string) => void;
+  /** Currently selected criterion slug (for highlighting). */
+  selectedCriterion?: string | null;
 }
 
-export function ScoreBars({ scores }: ScoreBarsProps) {
+export function ScoreBars({ scores, onCriterionClick, selectedCriterion }: ScoreBarsProps) {
   return (
     <div className="score-bars" role="list" aria-label="Security scores">
       {CRITERIA_ORDER.map((slug) => {
@@ -45,9 +49,24 @@ export function ScoreBars({ scores }: ScoreBarsProps) {
         const value = Number.isFinite(raw) ? raw : 0;
         const pct = Math.round(value * 100);
         const label = CRITERIA_LABELS[slug] ?? slug;
+        const isClickable = !!onCriterionClick;
+        const isSelected = selectedCriterion === slug;
 
         return (
-          <div className="score-row" key={slug} role="listitem">
+          <div
+            className={`score-row${isClickable ? ' clickable' : ''}${isSelected ? ' selected' : ''}`}
+            key={slug}
+            role="listitem"
+            onClick={isClickable ? () => onCriterionClick!(slug) : undefined}
+            onKeyDown={isClickable ? (e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onCriterionClick!(slug);
+              }
+            } : undefined}
+            tabIndex={isClickable ? 0 : undefined}
+            style={{ cursor: isClickable ? 'pointer' : undefined }}
+          >
             <span className="score-label" id={`score-label-${slug}`}>{label}</span>
             <div
               className="score-bar-bg"
@@ -57,7 +76,7 @@ export function ScoreBars({ scores }: ScoreBarsProps) {
               aria-valuemax={100}
               aria-labelledby={`score-label-${slug}`}
               aria-valuetext={`${label}: ${pct}% — ${scoreLevel(value)}`}
-              title={`${label}: ${pct}% — ${scoreLevel(value)}`}
+              title={isClickable ? `Click to see events scored for ${label}` : `${label}: ${pct}% — ${scoreLevel(value)}`}
             >
               <div
                 className="score-bar-fill"
@@ -76,3 +95,6 @@ export function ScoreBars({ scores }: ScoreBarsProps) {
     </div>
   );
 }
+
+/** Exported for use by other components */
+export { CRITERIA_LABELS, CRITERIA_ORDER };

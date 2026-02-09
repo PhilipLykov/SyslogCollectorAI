@@ -92,6 +92,61 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
     },
   );
 
+  // ── Events with scores for a system, optionally filtered by criterion ──
+  //    Returns events sorted by score (highest first) for a given system.
+  //    Used by the criterion drill-down UI.
+  app.get<{
+    Params: { systemId: string };
+    Querystring: { criterion_id?: string; limit?: string };
+  }>(
+    '/api/v1/systems/:systemId/event-scores',
+    { preHandler: requireAuth('admin', 'read', 'dashboard') },
+    async (request, reply) => {
+      const { systemId } = request.params;
+      const criterionId = request.query.criterion_id;
+      const rawLimit = Number(request.query.limit ?? 50);
+      const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(1, rawLimit), 200) : 50;
+
+      let query = db('event_scores')
+        .join('events', 'event_scores.event_id', 'events.id')
+        .join('criteria', 'event_scores.criterion_id', 'criteria.id')
+        .where('events.system_id', systemId)
+        .where('event_scores.score_type', 'event')
+        .orderBy('event_scores.score', 'desc')
+        .limit(limit)
+        .select(
+          'events.id as event_id',
+          'events.timestamp',
+          'events.message',
+          'events.severity',
+          'events.host',
+          'events.program',
+          'criteria.slug as criterion_slug',
+          'criteria.name as criterion_name',
+          'event_scores.score',
+          'event_scores.severity_label',
+          'event_scores.reason_codes',
+        );
+
+      if (criterionId) {
+        query = query.where('event_scores.criterion_id', Number(criterionId));
+      }
+
+      const rows = await query;
+
+      // Parse reason_codes JSON safely
+      const results = rows.map((r: any) => {
+        let reasons = r.reason_codes;
+        if (typeof reasons === 'string') {
+          try { reasons = JSON.parse(reasons); } catch { /* keep as string */ }
+        }
+        return { ...r, reason_codes: reasons };
+      });
+
+      return reply.send(results);
+    },
+  );
+
   // ── Meta result for a window ───────────────────────────────
   app.get<{ Params: { windowId: string } }>(
     '/api/v1/windows/:windowId/meta',

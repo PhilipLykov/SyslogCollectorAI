@@ -397,6 +397,32 @@ export async function deleteSilence(id: string): Promise<void> {
   return apiFetch(`/api/v1/silences/${id}`, { method: 'DELETE' });
 }
 
+// ── Event Scores (criterion drill-down) ──────────────────────
+
+export interface EventScoreRecord {
+  event_id: string;
+  timestamp: string;
+  message: string;
+  severity: string | null;
+  host: string | null;
+  program: string | null;
+  criterion_slug: string;
+  criterion_name: string;
+  score: number;
+  severity_label: string | null;
+  reason_codes: string[] | null;
+}
+
+export async function fetchEventScores(
+  systemId: string,
+  opts?: { criterion_id?: number; limit?: number },
+): Promise<EventScoreRecord[]> {
+  const params = new URLSearchParams();
+  if (opts?.criterion_id) params.set('criterion_id', String(opts.criterion_id));
+  if (opts?.limit) params.set('limit', String(opts.limit));
+  return apiFetch(`/api/v1/systems/${systemId}/event-scores?${params}`);
+}
+
 // ── Scoring Criteria (static, matches backend CRITERIA) ──────
 
 export const CRITERIA = [
