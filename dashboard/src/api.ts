@@ -890,6 +890,72 @@ export async function fetchMaintenanceHistory(limit?: number): Promise<Maintenan
   return apiFetch(`/api/v1/maintenance/history${qs}`);
 }
 
+// ── Database Backup ──────────────────────────────────────────
+
+export interface BackupConfig {
+  backup_enabled: boolean;
+  backup_interval_hours: number;
+  backup_retention_count: number;
+  backup_format: 'custom' | 'plain';
+}
+
+export interface BackupConfigResponse {
+  config: BackupConfig;
+  defaults: BackupConfig;
+  backups_count: number;
+  total_size_bytes: number;
+}
+
+export interface BackupFileInfo {
+  filename: string;
+  size_bytes: number;
+  size_human: string;
+  created_at: string;
+}
+
+export interface BackupRunResult {
+  success: boolean;
+  filename: string | null;
+  size_bytes: number | null;
+  duration_ms: number;
+  error: string | null;
+}
+
+export async function fetchBackupConfig(): Promise<BackupConfigResponse> {
+  return apiFetch('/api/v1/maintenance/backup/config');
+}
+
+export async function updateBackupConfig(data: Partial<BackupConfig>): Promise<{ config: BackupConfig; defaults: BackupConfig }> {
+  return apiFetch('/api/v1/maintenance/backup/config', {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function triggerBackup(): Promise<BackupRunResult> {
+  return apiFetch('/api/v1/maintenance/backup/trigger', {
+    method: 'POST',
+  });
+}
+
+export async function fetchBackupList(): Promise<BackupFileInfo[]> {
+  return apiFetch('/api/v1/maintenance/backup/list');
+}
+
+export function getBackupDownloadUrl(filename: string): string {
+  return `${BASE_URL}/api/v1/maintenance/backup/download/${encodeURIComponent(filename)}`;
+}
+
+export function getApiKeyForDownload(): string {
+  return getApiKey();
+}
+
+export async function deleteBackup(filename: string): Promise<{ deleted: boolean; filename: string }> {
+  return apiFetch(`/api/v1/maintenance/backup/${encodeURIComponent(filename)}`, {
+    method: 'DELETE',
+  });
+}
+
 // ── Privacy Settings ─────────────────────────────────────────
 
 export interface CustomFilterPattern {
@@ -907,6 +973,9 @@ export interface PrivacyFilterConfig {
   filter_user_paths: boolean;
   filter_mac_addresses: boolean;
   filter_credit_cards: boolean;
+  filter_passwords: boolean;
+  filter_api_keys: boolean;
+  filter_usernames: boolean;
   strip_host_field: boolean;
   strip_program_field: boolean;
   custom_patterns: CustomFilterPattern[];

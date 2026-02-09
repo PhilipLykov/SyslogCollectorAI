@@ -53,6 +53,9 @@ const FILTER_CATEGORIES: Array<{
   { key: 'filter_user_paths', label: 'User Paths', description: 'Replace /home/user or C:\\Users\\user paths', example: '/home/admin/.ssh → <USER_PATH>' },
   { key: 'filter_mac_addresses', label: 'MAC Addresses', description: 'Replace MAC addresses with <MAC>', example: 'aa:bb:cc:dd:ee:ff → <MAC>' },
   { key: 'filter_credit_cards', label: 'Credit Card Numbers', description: 'Replace card-like number sequences', example: '4111-1111-1111-1111 → <CARD>' },
+  { key: 'filter_passwords', label: 'Passwords / Secrets', description: 'Replace password, secret, passwd, pwd values', example: 'password=MyS3cret → password=<PASSWORD>' },
+  { key: 'filter_api_keys', label: 'API Keys / Tokens', description: 'Replace api_key, access_key, bearer token values', example: 'api_key=sk-abc123 → api_key=<API_KEY>' },
+  { key: 'filter_usernames', label: 'Usernames / Logins', description: 'Replace user, username, login, uid values', example: 'user=admin → user=<USERNAME>' },
 ];
 
 export function PrivacySection({ onAuthError }: PrivacySectionProps) {

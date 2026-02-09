@@ -21,9 +21,13 @@ COPY --from=builder /app/package-lock.json* ./
 # Install only production dependencies (smaller image, no devDependencies)
 RUN npm ci --omit=dev && npm cache clean --force
 
+# Install postgresql-client for pg_dump backup support (~5 MB)
+# pg_dump is backward-compatible: newer client works with older server
+RUN apk add --no-cache postgresql-client
+
 # Knex migrations/seeds are compiled into dist/
-# Data directory for any local files
-RUN mkdir -p /app/data && chown appuser:appgroup /app/data
+# Data directory for any local files + backups
+RUN mkdir -p /app/data/backups && chown -R appuser:appgroup /app/data
 
 USER appuser
 

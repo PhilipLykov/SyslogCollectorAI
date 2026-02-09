@@ -15,8 +15,10 @@ Enterprise-grade system that **collects** syslog events, **stores** them in Post
 - **RAG "Ask AI"** — natural language queries across all events with persistent chat history
 - **LLM Token Optimization** — score caching by message template, severity pre-filtering, message truncation, configurable batch size, low-score auto-skip
 - **Alerting** — rule-based notifications via Webhook, Pushover, NTfy, Gotify, Telegram; silences, throttling, recovery alerts
-- **Privacy Controls** — PII masking (IP, email, phone, URL, MAC, credit card, custom regex), field stripping, bulk event deletion, RAG/LLM usage purge
+- **Privacy Controls** — PII masking (IP, email, phone, URL, MAC, credit card, password/secret, API key, username, custom regex), field stripping, bulk event deletion, RAG/LLM usage purge
+- **Database Backup** — automated pg_dump backups with configurable schedule, retention, format (custom binary / plain SQL), download & delete from UI
 - **Database Maintenance** — per-system data retention, scheduled VACUUM ANALYZE & REINDEX, manual trigger, run history
+- **Table Partitioning** — events table auto-partitioned by month for faster queries and instant old-data cleanup via partition drops
 - **Configurable Prompts** — system, meta-analysis, and RAG prompts editable via GUI
 - **LLM Usage Tracking** — per-request token count and cost estimation with model-aware pricing
 
@@ -114,6 +116,8 @@ docker compose up -d
 Services:
 - **backend** on port `3000` (API + AI pipeline)
 - **dashboard** on port `8070` (React UI via nginx)
+
+The backend container mounts `./backups` for database backup files. These persist across container restarts.
 
 ## Syslog Forwarder Setup
 
@@ -307,6 +311,12 @@ All endpoints require `X-API-Key` header with appropriate scope.
 | `PUT` | `/api/v1/maintenance-config` | admin | Update global retention days and maintenance interval |
 | `POST` | `/api/v1/maintenance/run` | admin | Trigger a manual maintenance run |
 | `GET` | `/api/v1/maintenance/history` | admin | List past maintenance run logs |
+| `GET` | `/api/v1/maintenance/backup/config` | admin | Get backup configuration |
+| `PUT` | `/api/v1/maintenance/backup/config` | admin | Update backup settings (schedule, retention, format) |
+| `POST` | `/api/v1/maintenance/backup/trigger` | admin | Trigger a manual database backup |
+| `GET` | `/api/v1/maintenance/backup/list` | admin | List available backup files with sizes |
+| `GET` | `/api/v1/maintenance/backup/download/:filename` | admin | Download a backup file |
+| `DELETE` | `/api/v1/maintenance/backup/:filename` | admin | Delete a specific backup file |
 
 ### Privacy
 

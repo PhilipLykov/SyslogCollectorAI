@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { createReadStream, statSync } from 'node:fs';
 import { getDb } from '../../db/index.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { localTimestamp } from '../../config/index.js';
@@ -7,6 +8,16 @@ import { askQuestion } from './rag.js';
 import { resolveAiConfig, resolveCustomPrompts, invalidateAiConfigCache } from '../llm/aiConfig.js';
 import { DEFAULT_SCORE_SYSTEM_PROMPT, DEFAULT_META_SYSTEM_PROMPT, DEFAULT_RAG_SYSTEM_PROMPT } from '../llm/adapter.js';
 import { runMaintenance, loadMaintenanceConfig } from '../maintenance/maintenanceJob.js';
+import {
+  loadBackupConfig,
+  invalidateBackupConfigCache,
+  runBackup,
+  listBackups,
+  getBackupPath,
+  deleteBackupFile,
+  cleanupOldBackups,
+  BACKUP_CONFIG_DEFAULTS,
+} from '../maintenance/backupJob.js';
 import { PRIVACY_FILTER_DEFAULTS, invalidatePrivacyFilterCache } from '../llm/llmPrivacyFilter.js';
 
 /**
@@ -900,6 +911,168 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
         app.log.error(`[${localTimestamp()}] Failed to fetch maintenance history: ${err.message}`);
         return reply.code(500).send({ error: 'Failed to fetch history.' });
       }
+    },
+  );
+
+  // ── Database Backup ────────────────────────────────────────
+
+  /** GET /api/v1/maintenance/backup/config — get backup settings. */
+  app.get(
+    '/api/v1/maintenance/backup/config',
+    { preHandler: requireAuth('admin') },
+    async (_req, reply) => {
+      try {
+        const cfg = await loadBackupConfig(db);
+        const backups = listBackups();
+        return reply.send({
+          config: cfg,
+          defaults: BACKUP_CONFIG_DEFAULTS,
+          backups_count: backups.length,
+          total_size_bytes: backups.reduce((sum, b) => sum + b.size_bytes, 0),
+        });
+      } catch (err: any) {
+        app.log.error(`[${localTimestamp()}] Failed to fetch backup config: ${err.message}`);
+        return reply.code(500).send({ error: 'Failed to fetch backup config.' });
+      }
+    },
+  );
+
+  /** PUT /api/v1/maintenance/backup/config — update backup settings. */
+  app.put(
+    '/api/v1/maintenance/backup/config',
+    { preHandler: requireAuth('admin') },
+    async (request, reply) => {
+      const body = (request.body as any) ?? {};
+
+      if (body.backup_interval_hours !== undefined) {
+        const v = Number(body.backup_interval_hours);
+        if (!Number.isFinite(v) || v < 1 || v > 720) {
+          return reply.code(400).send({ error: 'backup_interval_hours must be 1–720 (max 30 days).' });
+        }
+      }
+
+      if (body.backup_retention_count !== undefined) {
+        const v = Number(body.backup_retention_count);
+        if (!Number.isFinite(v) || v < 1 || v > 100) {
+          return reply.code(400).send({ error: 'backup_retention_count must be 1–100.' });
+        }
+      }
+
+      if (body.backup_format !== undefined) {
+        if (!['custom', 'plain'].includes(body.backup_format)) {
+          return reply.code(400).send({ error: 'backup_format must be "custom" or "plain".' });
+        }
+      }
+
+      try {
+        // Load existing, merge
+        const existing = await db('app_config').where({ key: 'backup_config' }).first('value');
+        let current: Record<string, unknown> = { ...BACKUP_CONFIG_DEFAULTS };
+        if (existing) {
+          const raw = typeof existing.value === 'string' ? JSON.parse(existing.value) : existing.value;
+          if (raw && typeof raw === 'object') current = { ...current, ...(raw as Record<string, unknown>) };
+        }
+
+        const allowedKeys = Object.keys(BACKUP_CONFIG_DEFAULTS);
+        for (const key of allowedKeys) {
+          if (body[key] !== undefined) {
+            current[key] = body[key];
+          }
+        }
+
+        await db.raw(`
+          INSERT INTO app_config (key, value) VALUES ('backup_config', ?::jsonb)
+          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        `, [JSON.stringify(current)]);
+
+        invalidateBackupConfigCache();
+        app.log.info(`[${localTimestamp()}] Backup config updated`);
+
+        return reply.send({ config: current, defaults: BACKUP_CONFIG_DEFAULTS });
+      } catch (err: any) {
+        app.log.error(`[${localTimestamp()}] Failed to update backup config: ${err.message}`);
+        return reply.code(500).send({ error: 'Failed to update backup config.' });
+      }
+    },
+  );
+
+  /** POST /api/v1/maintenance/backup/trigger — trigger manual backup. */
+  app.post(
+    '/api/v1/maintenance/backup/trigger',
+    { preHandler: requireAuth('admin') },
+    async (_req, reply) => {
+      try {
+        app.log.info(`[${localTimestamp()}] Manual backup triggered`);
+        const result = await runBackup(db);
+
+        // Run cleanup after backup
+        if (result.success) {
+          const cfg = await loadBackupConfig(db);
+          cleanupOldBackups(cfg.backup_retention_count);
+        }
+
+        return reply.send(result);
+      } catch (err: any) {
+        app.log.error(`[${localTimestamp()}] Manual backup failed: ${err.message}`);
+        return reply.code(500).send({ error: `Backup failed: ${err.message}` });
+      }
+    },
+  );
+
+  /** GET /api/v1/maintenance/backup/list — list available backup files. */
+  app.get(
+    '/api/v1/maintenance/backup/list',
+    { preHandler: requireAuth('admin') },
+    async (_req, reply) => {
+      try {
+        const backups = listBackups();
+        return reply.send(backups);
+      } catch (err: any) {
+        app.log.error(`[${localTimestamp()}] Failed to list backups: ${err.message}`);
+        return reply.code(500).send({ error: 'Failed to list backups.' });
+      }
+    },
+  );
+
+  /** GET /api/v1/maintenance/backup/download/:filename — download a backup file. */
+  app.get<{ Params: { filename: string } }>(
+    '/api/v1/maintenance/backup/download/:filename',
+    { preHandler: requireAuth('admin') },
+    async (request, reply) => {
+      const { filename } = request.params;
+      const filepath = getBackupPath(filename);
+
+      if (!filepath) {
+        return reply.code(404).send({ error: 'Backup file not found.' });
+      }
+
+      const stat = statSync(filepath);
+      const contentType = filename.endsWith('.dump')
+        ? 'application/octet-stream'
+        : 'application/gzip';
+
+      return reply
+        .header('Content-Type', contentType)
+        .header('Content-Disposition', `attachment; filename="${filename}"`)
+        .header('Content-Length', stat.size)
+        .send(createReadStream(filepath));
+    },
+  );
+
+  /** DELETE /api/v1/maintenance/backup/:filename — delete a specific backup. */
+  app.delete<{ Params: { filename: string } }>(
+    '/api/v1/maintenance/backup/:filename',
+    { preHandler: requireAuth('admin') },
+    async (request, reply) => {
+      const { filename } = request.params;
+      const deleted = deleteBackupFile(filename);
+
+      if (!deleted) {
+        return reply.code(404).send({ error: 'Backup file not found or could not be deleted.' });
+      }
+
+      app.log.info(`[${localTimestamp()}] Backup deleted: ${filename}`);
+      return reply.send({ deleted: true, filename });
     },
   );
 

@@ -3,10 +3,20 @@ import {
   type MaintenanceConfigResponse,
   type MaintenanceLogEntry,
   type MaintenanceRunResult,
+  type BackupConfig,
+  type BackupFileInfo,
+  type BackupRunResult,
   fetchMaintenanceConfig,
   updateMaintenanceConfig,
   triggerMaintenanceRun,
   fetchMaintenanceHistory,
+  fetchBackupConfig,
+  updateBackupConfig,
+  triggerBackup,
+  fetchBackupList,
+  getBackupDownloadUrl,
+  getApiKeyForDownload,
+  deleteBackup,
 } from '../api';
 
 interface DatabaseMaintenanceSectionProps {
@@ -52,6 +62,20 @@ export function DatabaseMaintenanceSection({ onAuthError }: DatabaseMaintenanceS
 
   const [showHistory, setShowHistory] = useState(false);
 
+  // Backup state
+  const [showBackup, setShowBackup] = useState(false);
+  const [backupConfig, setBackupConfig] = useState<BackupConfig | null>(null);
+  const [backupList, setBackupList] = useState<BackupFileInfo[]>([]);
+  const [backupEnabled, setBackupEnabled] = useState(false);
+  const [backupIntervalHours, setBackupIntervalHours] = useState('24');
+  const [backupRetentionCount, setBackupRetentionCount] = useState('7');
+  const [backupFormat, setBackupFormat] = useState<'custom' | 'plain'>('custom');
+  const [backupSaving, setBackupSaving] = useState(false);
+  const [backupMsg, setBackupMsg] = useState('');
+  const [backupError, setBackupError] = useState('');
+  const [backupRunning, setBackupRunning] = useState(false);
+  const [backupResult, setBackupResult] = useState<BackupRunResult | null>(null);
+
   const load = useCallback(async () => {
     try {
       setLoading(true);
@@ -63,6 +87,20 @@ export function DatabaseMaintenanceSection({ onAuthError }: DatabaseMaintenanceS
       setRetentionDays(String(cfgResp.config.default_retention_days));
       setIntervalHours(String(cfgResp.config.maintenance_interval_hours));
       setHistory(histResp);
+
+      // Load backup config
+      try {
+        const bCfg = await fetchBackupConfig();
+        setBackupConfig(bCfg.config);
+        setBackupEnabled(bCfg.config.backup_enabled);
+        setBackupIntervalHours(String(bCfg.config.backup_interval_hours));
+        setBackupRetentionCount(String(bCfg.config.backup_retention_count));
+        setBackupFormat(bCfg.config.backup_format);
+        const bList = await fetchBackupList();
+        setBackupList(bList);
+      } catch {
+        // Backup endpoints might not exist yet — non-critical
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('Authentication')) {
@@ -126,6 +164,94 @@ export function DatabaseMaintenanceSection({ onAuthError }: DatabaseMaintenanceS
       setSaveError(`Maintenance run failed: ${msg}`);
     } finally {
       setRunning(false);
+    }
+  };
+
+  const handleBackupSave = async () => {
+    const ih = Number(backupIntervalHours);
+    const rc = Number(backupRetentionCount);
+    if (!Number.isFinite(ih) || ih < 1 || ih > 720) {
+      setBackupError('Backup interval must be 1–720 hours.');
+      return;
+    }
+    if (!Number.isFinite(rc) || rc < 1 || rc > 100) {
+      setBackupError('Retention count must be 1–100.');
+      return;
+    }
+
+    setBackupSaving(true);
+    setBackupError('');
+    setBackupMsg('');
+    try {
+      const resp = await updateBackupConfig({
+        backup_enabled: backupEnabled,
+        backup_interval_hours: ih,
+        backup_retention_count: rc,
+        backup_format: backupFormat,
+      });
+      setBackupConfig(resp.config as BackupConfig);
+      setBackupMsg('Backup settings saved.');
+      setTimeout(() => setBackupMsg(''), 3000);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setBackupError(msg);
+    } finally {
+      setBackupSaving(false);
+    }
+  };
+
+  const handleBackupNow = async () => {
+    if (!confirm('Start a database backup now? This may take a few minutes for large databases.')) {
+      return;
+    }
+    setBackupRunning(true);
+    setBackupResult(null);
+    setBackupError('');
+    try {
+      const result = await triggerBackup();
+      setBackupResult(result);
+      // Refresh backup list
+      const bList = await fetchBackupList();
+      setBackupList(bList);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setBackupError(`Backup failed: ${msg}`);
+    } finally {
+      setBackupRunning(false);
+    }
+  };
+
+  const handleBackupDownload = async (filename: string) => {
+    try {
+      const url = getBackupDownloadUrl(filename);
+      const res = await fetch(url, {
+        headers: { 'X-API-Key': getApiKeyForDownload() },
+      });
+      if (!res.ok) throw new Error(`Download failed: ${res.statusText}`);
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(a.href);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setBackupError(`Download failed: ${msg}`);
+    }
+  };
+
+  const handleBackupDelete = async (filename: string) => {
+    if (!confirm(`Delete backup "${filename}"? This cannot be undone.`)) {
+      return;
+    }
+    try {
+      await deleteBackup(filename);
+      setBackupList((prev) => prev.filter((b) => b.filename !== filename));
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setBackupError(`Delete failed: ${msg}`);
     }
   };
 
@@ -359,6 +485,181 @@ export function DatabaseMaintenanceSection({ onAuthError }: DatabaseMaintenanceS
                 </table>
               </div>
             )}
+          </div>
+        )}
+      </div>
+      {/* ═══════ Database Backup ═══════ */}
+      <div className="db-config-section" style={{ marginTop: '24px' }}>
+        <button type="button" className="prompt-toggle" onClick={() => setShowBackup((v) => !v)}>
+          <span className={`prompt-chevron${showBackup ? ' open' : ''}`}>&#9654;</span>
+          Database Backup
+          {backupConfig?.backup_enabled && (
+            <span className="prompt-custom-badge" style={{ marginLeft: '8px' }}>
+              Active — every {backupConfig.backup_interval_hours}h, keep {backupConfig.backup_retention_count}
+            </span>
+          )}
+        </button>
+
+        {showBackup && (
+          <div style={{ marginTop: '12px' }}>
+            <p className="field-hint" style={{ marginBottom: '12px' }}>
+              Automated PostgreSQL backups using pg_dump. Backups are stored in the Docker volume and can be
+              downloaded from here. Enable scheduled backups or trigger a manual backup at any time.
+            </p>
+
+            {/* Backup Settings */}
+            <div className="db-config-grid" style={{ marginBottom: '12px' }}>
+              <div className="form-group">
+                <label className="privacy-toggle-label">
+                  <input
+                    type="checkbox"
+                    checked={backupEnabled}
+                    onChange={(e) => setBackupEnabled(e.target.checked)}
+                  />
+                  <strong>Enable Scheduled Backups</strong>
+                </label>
+                <span className="field-hint">
+                  When enabled, backups run automatically during maintenance cycles.
+                </span>
+              </div>
+
+              <div className="form-group">
+                <label htmlFor="backup-interval">Backup Interval (hours)</label>
+                <input
+                  id="backup-interval"
+                  type="number"
+                  min={1}
+                  max={720}
+                  value={backupIntervalHours}
+                  onChange={(e) => setBackupIntervalHours(e.target.value)}
+                  style={{ width: '120px' }}
+                  disabled={!backupEnabled}
+                />
+                <span className="field-hint">
+                  How often to create a new backup (1–720 hours).
+                </span>
+              </div>
+
+              <div className="form-group">
+                <label htmlFor="backup-retention">Keep Last N Backups</label>
+                <input
+                  id="backup-retention"
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={backupRetentionCount}
+                  onChange={(e) => setBackupRetentionCount(e.target.value)}
+                  style={{ width: '120px' }}
+                />
+                <span className="field-hint">
+                  Older backups are automatically deleted to save space.
+                </span>
+              </div>
+
+              <div className="form-group">
+                <label htmlFor="backup-format">Backup Format</label>
+                <select
+                  id="backup-format"
+                  value={backupFormat}
+                  onChange={(e) => setBackupFormat(e.target.value as 'custom' | 'plain')}
+                  style={{ width: '200px' }}
+                >
+                  <option value="custom">Custom (.dump) — compact binary</option>
+                  <option value="plain">Plain SQL (.sql.gz) — compressed text</option>
+                </select>
+                <span className="field-hint">
+                  Custom format is smaller and supports parallel restore. Plain SQL is human-readable.
+                </span>
+              </div>
+            </div>
+
+            <div className="db-config-actions">
+              <button className="btn" onClick={handleBackupSave} disabled={backupSaving}>
+                {backupSaving ? 'Saving…' : 'Save Backup Settings'}
+              </button>
+              <button
+                className="btn btn-outline"
+                onClick={handleBackupNow}
+                disabled={backupRunning}
+                title="Create a backup immediately"
+              >
+                {backupRunning ? 'Backing up…' : 'Run Backup Now'}
+              </button>
+            </div>
+
+            {backupMsg && <div className="success-msg">{backupMsg}</div>}
+            {backupError && <div className="error-msg" role="alert">{backupError}</div>}
+
+            {/* Backup Run Result */}
+            {backupResult && (
+              <div
+                className={`db-run-result`}
+                style={{ marginTop: '12px', borderColor: backupResult.success ? 'var(--green)' : 'var(--red)' }}
+              >
+                <h4>Backup Result</h4>
+                <div>
+                  <strong>Status:</strong>{' '}
+                  <span style={{ color: backupResult.success ? 'var(--green)' : 'var(--red)' }}>
+                    {backupResult.success ? 'Success' : 'Failed'}
+                  </span>
+                </div>
+                {backupResult.filename && <div><strong>File:</strong> {backupResult.filename}</div>}
+                {backupResult.size_bytes != null && (
+                  <div><strong>Size:</strong> {(backupResult.size_bytes / (1024 * 1024)).toFixed(2)} MB</div>
+                )}
+                <div><strong>Duration:</strong> {formatDuration(backupResult.duration_ms)}</div>
+                {backupResult.error && (
+                  <div style={{ color: 'var(--red)' }}><strong>Error:</strong> {backupResult.error}</div>
+                )}
+              </div>
+            )}
+
+            {/* Backup File List */}
+            <div style={{ marginTop: '16px' }}>
+              <h4 style={{ marginBottom: '8px' }}>Available Backups ({backupList.length})</h4>
+              {backupList.length === 0 ? (
+                <p className="text-muted">No backups available. Run a backup to create one.</p>
+              ) : (
+                <div className="table-responsive">
+                  <table className="db-retention-table" aria-label="Backup files">
+                    <thead>
+                      <tr>
+                        <th>Filename</th>
+                        <th>Size</th>
+                        <th>Created</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {backupList.map((b) => (
+                        <tr key={b.filename}>
+                          <td><code>{b.filename}</code></td>
+                          <td>{b.size_human}</td>
+                          <td>{formatEuDateTime(b.created_at)}</td>
+                          <td>
+                            <button
+                              className="btn btn-xs btn-outline"
+                              onClick={() => handleBackupDownload(b.filename)}
+                              title="Download this backup"
+                              style={{ marginRight: '6px' }}
+                            >
+                              Download
+                            </button>
+                            <button
+                              className="btn btn-xs btn-danger-outline"
+                              onClick={() => handleBackupDelete(b.filename)}
+                              title="Delete this backup"
+                            >
+                              Delete
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>

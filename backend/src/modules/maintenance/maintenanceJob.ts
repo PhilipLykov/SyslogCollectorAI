@@ -12,6 +12,7 @@
 
 import type { Knex } from 'knex';
 import { localTimestamp } from '../../config/index.js';
+import { loadBackupConfig, runBackup, cleanupOldBackups } from './backupJob.js';
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -66,6 +67,124 @@ export async function loadMaintenanceConfig(db: Knex): Promise<MaintenanceConfig
   }
 }
 
+// ── Partition Management ──────────────────────────────────────
+
+/**
+ * Check if the events table is partitioned.
+ */
+async function isEventsPartitioned(db: Knex): Promise<boolean> {
+  try {
+    const result = await db.raw(`
+      SELECT relkind FROM pg_class
+      WHERE relname = 'events'
+        AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public')
+    `);
+    return result.rows.length > 0 && result.rows[0].relkind === 'p';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Ensure monthly partitions exist for the next N months.
+ * Creates any missing partitions so new events always have a valid partition.
+ */
+async function ensureFuturePartitions(db: Knex, monthsAhead: number = 3): Promise<number> {
+  const now = new Date();
+  let created = 0;
+
+  for (let i = 0; i <= monthsAhead; i++) {
+    const date = new Date(now.getFullYear(), now.getMonth() + i, 1);
+    const year = date.getFullYear();
+    const month = date.getMonth(); // 0-indexed
+
+    const nextDate = new Date(year, month + 1, 1);
+    const partName = `events_y${year}m${String(month + 1).padStart(2, '0')}`;
+    const fromStr = `${year}-${String(month + 1).padStart(2, '0')}-01`;
+    const toStr = `${nextDate.getFullYear()}-${String(nextDate.getMonth() + 1).padStart(2, '0')}-01`;
+
+    // Check if partition exists
+    const exists = await db.raw(`
+      SELECT 1 FROM pg_class WHERE relname = ? AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public')
+    `, [partName]);
+
+    if (exists.rows.length === 0) {
+      try {
+        await db.raw(`
+          CREATE TABLE "${partName}"
+          PARTITION OF events
+          FOR VALUES FROM ('${fromStr}') TO ('${toStr}')
+        `);
+        created++;
+        console.log(`[${localTimestamp()}] Maintenance: created partition ${partName} (${fromStr} to ${toStr})`);
+      } catch (err: any) {
+        // Partition might overlap with default or another partition — log but don't fail
+        if (!err.message.includes('already exists')) {
+          console.warn(`[${localTimestamp()}] Maintenance: could not create partition ${partName}: ${err.message}`);
+        }
+      }
+    }
+  }
+
+  return created;
+}
+
+/**
+ * Drop partitions that are entirely older than the global retention cutoff.
+ * Only drops partitions whose end date is before the cutoff.
+ * Returns the count of dropped partitions.
+ */
+async function dropExpiredPartitions(db: Knex, cutoffDate: Date): Promise<{ droppedPartitions: string[]; eventsFreed: number }> {
+  const droppedPartitions: string[] = [];
+  let eventsFreed = 0;
+
+  // List all child partitions of events
+  const partResult = await db.raw(`
+    SELECT
+      c.relname AS partition_name,
+      pg_get_expr(c.relpartbound, c.oid) AS partition_bound
+    FROM pg_inherits i
+    JOIN pg_class c ON i.inhrelid = c.oid
+    JOIN pg_class p ON i.inhparent = p.oid
+    WHERE p.relname = 'events'
+      AND c.relname != 'events_default'
+    ORDER BY c.relname
+  `);
+
+  for (const row of partResult.rows) {
+    const partName: string = row.partition_name;
+    const bound: string = row.partition_bound;
+
+    // Parse the upper bound: FOR VALUES FROM ('2024-01-01') TO ('2024-02-01')
+    const toMatch = bound.match(/TO\s*\('([^']+)'\)/i);
+    if (!toMatch) continue;
+
+    const partEndDate = new Date(toMatch[1]);
+    if (isNaN(partEndDate.getTime())) continue;
+
+    // Only drop if the partition's end date is before the cutoff
+    if (partEndDate <= cutoffDate) {
+      try {
+        // Count events before dropping (for logging)
+        const countResult = await db.raw(`SELECT COUNT(*) as cnt FROM "${partName}"`);
+        const count = Number(countResult.rows[0]?.cnt ?? 0);
+
+        await db.raw(`DROP TABLE "${partName}"`);
+        droppedPartitions.push(partName);
+        eventsFreed += count;
+
+        console.log(
+          `[${localTimestamp()}] Maintenance: dropped partition ${partName} (${count} events, end: ${toMatch[1]})`
+        );
+      } catch (err: any) {
+        console.error(`[${localTimestamp()}] Maintenance: failed to drop partition ${partName}: ${err.message}`);
+      }
+    }
+  }
+
+  return { droppedPartitions, eventsFreed };
+}
+
 // ── Main Maintenance Job ───────────────────────────────────────
 
 export async function runMaintenance(db: Knex): Promise<MaintenanceRunResult> {
@@ -82,7 +201,39 @@ export async function runMaintenance(db: Knex): Promise<MaintenanceRunResult> {
   let vacuumRan = false;
   let reindexRan = false;
 
-  // ── 1. Data Retention Cleanup ─────────────────────────────
+  // ── 0. Partition management (if events table is partitioned) ──
+  const partitioned = await isEventsPartitioned(db);
+  if (partitioned) {
+    try {
+      // Ensure future partitions exist (3 months ahead)
+      const newParts = await ensureFuturePartitions(db, 3);
+      if (newParts > 0) {
+        console.log(`[${localTimestamp()}] Maintenance: created ${newParts} new future partition(s)`);
+      }
+
+      // Drop partitions that are fully older than the global retention cutoff
+      // (Partition-level drops are instant and far more efficient than row-level deletes)
+      const globalCutoff = new Date();
+      globalCutoff.setDate(globalCutoff.getDate() - config.default_retention_days);
+
+      const { droppedPartitions, eventsFreed } = await dropExpiredPartitions(db, globalCutoff);
+      if (droppedPartitions.length > 0) {
+        totalEventsDeleted += eventsFreed;
+        console.log(
+          `[${localTimestamp()}] Maintenance: dropped ${droppedPartitions.length} expired partition(s), ` +
+          `freed ~${eventsFreed} events`,
+        );
+      }
+    } catch (err: any) {
+      const msg = `Partition management failed: ${err.message}`;
+      console.error(`[${localTimestamp()}] Maintenance: ${msg}`);
+      errors.push(msg);
+    }
+  }
+
+  // ── 1. Data Retention Cleanup (per-system row-level deletes) ──
+  //    Even with partitioning, per-system custom retention still needs row-level deletes
+  //    for events that fall within a partition that shouldn't be fully dropped.
   try {
     const systems = await db('monitored_systems')
       .select('id', 'name', 'retention_days');
@@ -243,7 +394,57 @@ export async function runMaintenance(db: Knex): Promise<MaintenanceRunResult> {
     errors.push(msg);
   }
 
-  // ── 4. Log the run ────────────────────────────────────────
+  // ── 4. Scheduled Backup ─────────────────────────────────────
+  let backupRan = false;
+  try {
+    const backupCfg = await loadBackupConfig(db);
+    if (backupCfg.backup_enabled) {
+      // Check if enough time has passed since last backup
+      let shouldBackup = true;
+      try {
+        const lastBackupRow = await db('app_config')
+          .where({ key: 'last_backup_at' })
+          .first('value');
+        if (lastBackupRow) {
+          const raw = typeof lastBackupRow.value === 'string'
+            ? JSON.parse(lastBackupRow.value)
+            : lastBackupRow.value;
+          const lastTime = new Date(raw as string).getTime();
+          const minInterval = backupCfg.backup_interval_hours * 60 * 60 * 1000;
+          if (Date.now() - lastTime < minInterval) {
+            shouldBackup = false;
+          }
+        }
+      } catch {
+        // No last backup recorded — proceed
+      }
+
+      if (shouldBackup) {
+        console.log(`[${localTimestamp()}] Maintenance: starting scheduled backup...`);
+        const backupResult = await runBackup(db);
+        backupRan = backupResult.success;
+
+        if (backupResult.success) {
+          // Record last backup time
+          await db.raw(`
+            INSERT INTO app_config (key, value) VALUES ('last_backup_at', ?::jsonb)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+          `, [JSON.stringify(new Date().toISOString())]);
+
+          // Cleanup old backups
+          cleanupOldBackups(backupCfg.backup_retention_count);
+        } else {
+          errors.push(`Scheduled backup failed: ${backupResult.error}`);
+        }
+      }
+    }
+  } catch (err: any) {
+    const msg = `Backup step failed: ${err.message}`;
+    console.error(`[${localTimestamp()}] Maintenance: ${msg}`);
+    errors.push(msg);
+  }
+
+  // ── 5. Log the run ────────────────────────────────────────
   const finished_at = new Date().toISOString();
   const duration_ms = Date.now() - startTime;
 

@@ -17,6 +17,9 @@
  *  - User / home-directory paths
  *  - MAC addresses
  *  - Credit card numbers (basic Luhn-irrelevant pattern match)
+ *  - Passwords / secrets (key=value patterns)
+ *  - API keys / tokens (key=value and common key formats)
+ *  - Usernames / login identifiers
  *  - Custom user-defined regex patterns
  */
 
@@ -38,6 +41,9 @@ export interface PrivacyFilterConfig {
   filter_user_paths: boolean;
   filter_mac_addresses: boolean;
   filter_credit_cards: boolean;
+  filter_passwords: boolean;
+  filter_api_keys: boolean;
+  filter_usernames: boolean;
 
   /** Whether to strip the `host` field from events sent to LLM. */
   strip_host_field: boolean;
@@ -65,6 +71,9 @@ export const PRIVACY_FILTER_DEFAULTS: PrivacyFilterConfig = {
   filter_user_paths: true,
   filter_mac_addresses: true,
   filter_credit_cards: true,
+  filter_passwords: true,
+  filter_api_keys: true,
+  filter_usernames: true,
   strip_host_field: false,
   strip_program_field: false,
   custom_patterns: [],
@@ -106,6 +115,21 @@ const PATTERN_MAP: Record<string, { regex: RegExp; placeholder: string }> = {
   filter_credit_cards: {
     regex: /\b(?:\d[ -]*?){13,19}\b/g,
     placeholder: '<CARD>',
+  },
+  filter_passwords: {
+    // Matches password/secret/passwd/pwd/passphrase followed by = or : and a value (quoted or unquoted)
+    regex: /(?<=(?:password|passwd|pwd|secret|pass_?phrase)\s*[=:]\s*)(?:"[^"]*"|'[^']*'|\S+)/gi,
+    placeholder: '<PASSWORD>',
+  },
+  filter_api_keys: {
+    // Matches api_key/api-key/access_key/secret_key/auth_token/bearer followed by = or : and a value
+    regex: /(?<=(?:api[_-]?key|access[_-]?key|secret[_-]?key|auth[_-]?token|bearer)\s*[=:\s]\s*)(?:"[^"]*"|'[^']*'|\S+)/gi,
+    placeholder: '<API_KEY>',
+  },
+  filter_usernames: {
+    // Matches user/username/login/uid/account followed by = or : and a value
+    regex: /(?<=(?:user(?:name)?|login|uid|account)\s*[=:]\s*)(?:"[^"]*"|'[^']*'|\S+)/gi,
+    placeholder: '<USERNAME>',
   },
 };
 
