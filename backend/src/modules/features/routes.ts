@@ -63,11 +63,74 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
 
       try {
         const result = await askQuestion(db, question, { systemId: system_id, from, to });
+
+        // Persist Q&A to rag_history
+        try {
+          let systemName: string | null = null;
+          if (system_id) {
+            const sys = await db('monitored_systems').where({ id: system_id }).first('name');
+            systemName = sys?.name ?? null;
+          }
+          await db('rag_history').insert({
+            question: question.replace(/[\x00-\x1f]/g, '').slice(0, 500),
+            answer: result.answer,
+            system_id: system_id || null,
+            system_name: systemName,
+            from_filter: from || null,
+            to_filter: to || null,
+            context_used: result.context_used,
+          });
+        } catch (saveErr: any) {
+          // Non-critical — log but don't fail the response
+          app.log.warn(`[${localTimestamp()}] Failed to save RAG history: ${saveErr.message}`);
+        }
+
         return reply.send(result);
       } catch (err: any) {
         // askQuestion already sanitizes the error message for the client
         return reply.code(500).send({ error: err.message ?? 'Internal error processing question.' });
       }
+    },
+  );
+
+  // ── RAG history ──────────────────────────────────────────────
+
+  /** GET /api/v1/ask/history — list persisted Q&A entries */
+  app.get<{ Querystring: { system_id?: string; limit?: string } }>(
+    '/api/v1/ask/history',
+    { preHandler: requireAuth('admin', 'read', 'dashboard') },
+    async (request, reply) => {
+      const { system_id } = request.query;
+      const rawLimit = Number(request.query.limit ?? 50);
+      const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(1, rawLimit), 200) : 50;
+
+      let query = db('rag_history')
+        .orderBy('created_at', 'desc')
+        .limit(limit)
+        .select('*');
+
+      if (system_id) {
+        query = query.where({ system_id });
+      }
+
+      const rows = await query;
+      return reply.send(rows);
+    },
+  );
+
+  /** DELETE /api/v1/ask/history — clear all or system-scoped history */
+  app.delete<{ Querystring: { system_id?: string } }>(
+    '/api/v1/ask/history',
+    { preHandler: requireAuth('admin') },
+    async (request, reply) => {
+      const { system_id } = request.query;
+      let query = db('rag_history');
+      if (system_id) {
+        query = query.where({ system_id });
+      }
+      const deleted = await query.del();
+      app.log.info(`[${localTimestamp()}] RAG history cleared: ${deleted} entries${system_id ? ` (system ${system_id})` : ''}`);
+      return reply.send({ deleted });
     },
   );
 

@@ -662,6 +662,33 @@ export async function askAi(params: AskAiParams): Promise<AskAiResponse> {
   });
 }
 
+export interface RagHistoryEntry {
+  id: string;
+  question: string;
+  answer: string;
+  system_id: string | null;
+  system_name: string | null;
+  from_filter: string | null;
+  to_filter: string | null;
+  context_used: number;
+  created_at: string;
+}
+
+export async function fetchRagHistory(opts?: {
+  system_id?: string;
+  limit?: number;
+}): Promise<RagHistoryEntry[]> {
+  const qs = new URLSearchParams();
+  if (opts?.system_id) qs.set('system_id', opts.system_id);
+  if (opts?.limit) qs.set('limit', String(opts.limit));
+  return apiFetch(`/api/v1/ask/history?${qs}`);
+}
+
+export async function clearRagHistory(systemId?: string): Promise<{ deleted: number }> {
+  const qs = systemId ? `?system_id=${systemId}` : '';
+  return apiFetch(`/api/v1/ask/history${qs}`, { method: 'DELETE' });
+}
+
 // ── Event Acknowledgement ────────────────────────────────────
 
 export interface AckEventsParams {

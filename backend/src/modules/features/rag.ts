@@ -13,11 +13,16 @@ import { DEFAULT_RAG_SYSTEM_PROMPT } from '../llm/adapter.js';
  * Note: Full prompt injection prevention for LLM is an evolving challenge.
  * The question is placed inside a clearly delimited block.
  */
+export interface RagResult {
+  answer: string;
+  context_used: number;
+}
+
 export async function askQuestion(
   db: Knex,
   question: string,
   options?: { systemId?: string; from?: string; to?: string },
-): Promise<{ answer: string; context_used: number }> {
+): Promise<RagResult> {
   // Resolve config from DB first, then env vars (supports runtime changes via UI)
   const aiCfg = await resolveAiConfig(db);
   const apiKey = aiCfg.apiKey;

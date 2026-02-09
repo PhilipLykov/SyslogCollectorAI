@@ -1,5 +1,11 @@
-import { useState, useRef, useEffect } from 'react';
-import { type DashboardSystem, askAi } from '../api';
+import { useState, useRef, useEffect, useCallback } from 'react';
+import {
+  type DashboardSystem,
+  type RagHistoryEntry,
+  askAi,
+  fetchRagHistory,
+  clearRagHistory,
+} from '../api';
 
 // ── EU date format helper ────────────────────────────────────
 
@@ -31,15 +37,6 @@ interface AskAiPanelProps {
   onAuthError: () => void;
 }
 
-interface HistoryEntry {
-  question: string;
-  answer: string;
-  contextUsed: number;
-  systemLabel: string;
-  periodLabel: string;
-  timestamp: string;
-}
-
 // ── Component ────────────────────────────────────────────────
 
 export function AskAiPanel({
@@ -56,8 +53,35 @@ export function AskAiPanel({
   const [toDate, setToDate] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [history, setHistory] = useState<RagHistoryEntry[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const historyLoaded = useRef(false);
+
+  // Load persisted history when the panel first expands
+  const loadHistory = useCallback(async () => {
+    setHistoryLoading(true);
+    try {
+      const opts: { system_id?: string; limit?: number } = { limit: 100 };
+      if (fixedSystemId) opts.system_id = fixedSystemId;
+      const rows = await fetchRagHistory(opts);
+      setHistory(rows);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('Authentication')) { onAuthError(); return; }
+      // silently ignore — user will see empty history
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [fixedSystemId, onAuthError]);
+
+  useEffect(() => {
+    if (expanded && !historyLoaded.current) {
+      historyLoaded.current = true;
+      loadHistory();
+    }
+  }, [expanded, loadHistory]);
 
   // Focus input when panel opens
   useEffect(() => {
@@ -90,29 +114,26 @@ export function AskAiPanel({
 
       const res = await askAi(params);
 
-      // Build labels for history
-      let systemLabel = 'All systems';
+      // Build a synthetic RagHistoryEntry for immediate display
+      // (the backend already saved it; we prepend to avoid a full reload)
+      let sysName: string | null = null;
       if (fixedSystemId && fixedSystemName) {
-        systemLabel = fixedSystemName;
+        sysName = fixedSystemName;
       } else if (effectiveSystemId && systems) {
         const s = systems.find((sys) => sys.id === effectiveSystemId);
-        systemLabel = s ? s.name : effectiveSystemId;
+        sysName = s ? s.name : null;
       }
 
-      let periodLabel = 'All time';
-      if (periodMode === 'custom') {
-        const fmtFrom = fromDate ? formatEuDate(new Date(fromDate).toISOString()) : 'beginning';
-        const fmtTo = toDate ? formatEuDate(new Date(toDate).toISOString()) : 'now';
-        periodLabel = `${fmtFrom} — ${fmtTo}`;
-      }
-
-      const entry: HistoryEntry = {
+      const entry: RagHistoryEntry = {
+        id: crypto.randomUUID?.() ?? String(Date.now()),
         question: q,
         answer: res.answer,
-        contextUsed: res.context_used,
-        systemLabel,
-        periodLabel,
-        timestamp: new Date().toISOString(),
+        system_id: effectiveSystemId || null,
+        system_name: sysName,
+        from_filter: params.from ?? null,
+        to_filter: params.to ?? null,
+        context_used: res.context_used,
+        created_at: new Date().toISOString(),
       };
 
       setHistory((prev) => [entry, ...prev]);
@@ -129,12 +150,37 @@ export function AskAiPanel({
     }
   };
 
+  const handleClearHistory = async () => {
+    const scope = fixedSystemId ? `for "${fixedSystemName}"` : '(all systems)';
+    if (!window.confirm(`Clear all Ask AI history ${scope}?`)) return;
+
+    setClearing(true);
+    try {
+      await clearRagHistory(fixedSystemId);
+      setHistory([]);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('Authentication')) { onAuthError(); return; }
+      setError(msg);
+    } finally {
+      setClearing(false);
+    }
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Ctrl+Enter or Cmd+Enter to submit
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       e.preventDefault();
       handleAsk();
     }
+  };
+
+  /** Build a human-readable period label for a history entry. */
+  const periodLabel = (h: RagHistoryEntry): string => {
+    if (!h.from_filter && !h.to_filter) return 'All time';
+    const from = h.from_filter ? formatEuDate(h.from_filter) : 'beginning';
+    const to = h.to_filter ? formatEuDate(h.to_filter) : 'now';
+    return `${from} — ${to}`;
   };
 
   return (
@@ -147,6 +193,9 @@ export function AskAiPanel({
         <span className="ask-ai-icon">&#x1F916;</span>
         {' '}
         Ask AI
+        {history.length > 0 && !expanded && (
+          <span className="ask-ai-count">{history.length}</span>
+        )}
         <span className="ask-ai-chevron">{expanded ? '\u25B2' : '\u25BC'}</span>
       </button>
 
@@ -230,17 +279,42 @@ export function AskAiPanel({
 
           {error && <div className="error-msg" role="alert">{error}</div>}
 
+          {/* ── History header with clear button ── */}
+          {history.length > 0 && (
+            <div className="ask-ai-history-header">
+              <span className="ask-ai-history-title">
+                Chat History ({history.length})
+              </span>
+              <button
+                className="btn btn-xs btn-outline"
+                onClick={handleClearHistory}
+                disabled={clearing}
+                title="Clear all chat history"
+              >
+                {clearing ? '...' : 'Clear History'}
+              </button>
+            </div>
+          )}
+
+          {historyLoading && (
+            <div className="ask-ai-history-loading">Loading history...</div>
+          )}
+
           {/* ── Answer history ── */}
           {history.length > 0 && (
             <div className="ask-ai-history">
-              {history.map((h, idx) => (
-                <div key={idx} className="ask-ai-entry">
+              {history.map((h) => (
+                <div key={h.id} className="ask-ai-entry">
                   <div className="ask-ai-entry-header">
                     <span className="ask-ai-entry-q">Q: {h.question}</span>
                     <span className="ask-ai-entry-meta">
-                      {h.systemLabel} · {h.periodLabel} · {h.contextUsed} context window{h.contextUsed !== 1 ? 's' : ''}
+                      {h.system_name ?? 'All systems'}
                       {' · '}
-                      {formatEuDate(h.timestamp)}
+                      {periodLabel(h)}
+                      {' · '}
+                      {h.context_used} context window{h.context_used !== 1 ? 's' : ''}
+                      {' · '}
+                      {formatEuDate(h.created_at)}
                     </span>
                   </div>
                   <div className="ask-ai-entry-answer">{h.answer}</div>

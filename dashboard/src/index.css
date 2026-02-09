@@ -3417,11 +3417,48 @@ tr.event-row-acked:hover {
   margin-top: 4px;
 }
 
-.ask-ai-history {
+.ask-ai-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 700;
+  margin-left: 6px;
+}
+
+.ask-ai-history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   margin-top: 16px;
+  margin-bottom: 4px;
+}
+
+.ask-ai-history-title {
+  font-weight: 600;
+  font-size: 0.88rem;
+  color: var(--text-muted);
+}
+
+.ask-ai-history-loading {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  margin-top: 12px;
+}
+
+.ask-ai-history {
+  margin-top: 8px;
   display: flex;
   flex-direction: column;
   gap: 12px;
+  max-height: 600px;
+  overflow-y: auto;
 }
 
 .ask-ai-entry {
