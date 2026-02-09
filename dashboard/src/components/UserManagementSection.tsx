@@ -178,142 +178,170 @@ export function UserManagementSection({ onAuthError, currentUser }: Props) {
     return new Date(d).toLocaleString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
   };
 
-  if (loading) return <div className="loading"><div className="spinner" /> Loading users…</div>;
+  if (loading) {
+    return (
+      <div className="settings-loading">
+        <div className="spinner" />
+        Loading users…
+      </div>
+    );
+  }
 
   return (
-    <div className="settings-section">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-        <h3>User Management</h3>
-        <button className="btn btn-sm" onClick={() => setShowCreate(!showCreate)}>
-          {showCreate ? 'Cancel' : '+ Create User'}
-        </button>
-      </div>
+    <div className="admin-section">
+      <h3 className="section-title">User Management</h3>
+      <p className="section-desc">
+        Create and manage user accounts, assign roles, and control access to the system.
+      </p>
 
       {error && <div className="error-msg" role="alert">{error}</div>}
       {success && <div className="success-msg" role="status">{success}</div>}
 
-      {showCreate && (
-        <form className="settings-form" onSubmit={handleCreate} style={{ marginBottom: '1.5rem', padding: '1rem', border: '1px solid var(--border)', borderRadius: '8px' }}>
-          <h4>Create New User</h4>
-          <div className="form-row">
-            <label>Username *</label>
-            <input type="text" value={newUsername} onChange={(e) => setNewUsername(e.target.value)} required minLength={3} placeholder="min 3 characters" />
-          </div>
-          <div className="form-row">
-            <label>Password *</label>
-            <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} required minLength={12} placeholder="min 12 chars, 1 upper, 1 lower, 1 digit, 1 special" />
-          </div>
-          <div className="form-row">
-            <label>Display Name</label>
-            <input type="text" value={newDisplayName} onChange={(e) => setNewDisplayName(e.target.value)} placeholder="Optional" />
-          </div>
-          <div className="form-row">
-            <label>Email</label>
-            <input type="email" value={newEmail} onChange={(e) => setNewEmail(e.target.value)} placeholder="Optional" />
-          </div>
-          <div className="form-row">
-            <label>Role</label>
-            <select value={newRole} onChange={(e) => setNewRole(e.target.value)}>
-              {ROLES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
-            </select>
-          </div>
-          <button type="submit" className="btn" disabled={creating || !newUsername.trim() || !newPassword}>
-            {creating ? 'Creating…' : 'Create User'}
-          </button>
-        </form>
-      )}
+      {/* ── Create User ── */}
+      <div className="admin-block">
+        <button type="button" className="prompt-toggle" onClick={() => setShowCreate(!showCreate)}>
+          <span className={`prompt-chevron${showCreate ? ' open' : ''}`}>&#9654;</span>
+          Create New User
+          <span className="prompt-custom-badge">{users.length} user(s)</span>
+        </button>
 
-      <div className="table-container">
-        <table>
-          <thead>
-            <tr>
-              <th>Username</th>
-              <th>Display Name</th>
-              <th>Role</th>
-              <th>Status</th>
-              <th>Last Login</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {users.map((u) => (
-              <tr key={u.id} style={{ opacity: u.is_active ? 1 : 0.5 }}>
-                <td><strong>{u.username}</strong></td>
-                <td>
-                  {editingId === u.id ? (
-                    <input type="text" value={editDisplayName} onChange={(e) => setEditDisplayName(e.target.value)} style={{ width: '100%' }} />
-                  ) : (
-                    u.display_name || '—'
-                  )}
-                </td>
-                <td>
-                  {editingId === u.id ? (
-                    <select value={editRole} onChange={(e) => setEditRole(e.target.value)}>
-                      {ROLES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
-                    </select>
-                  ) : (
-                    <span className={`badge badge-${u.role === 'administrator' ? 'danger' : u.role === 'auditor' ? 'warning' : 'info'}`}>
-                      {u.role.replace(/_/g, ' ')}
-                    </span>
-                  )}
-                </td>
-                <td>
-                  <span className={`badge ${u.is_active ? 'badge-success' : 'badge-muted'}`}>
-                    {u.is_active ? 'Active' : 'Disabled'}
-                  </span>
-                  {u.locked_until && new Date(u.locked_until) > new Date() && (
-                    <span className="badge badge-warning" style={{ marginLeft: '0.3rem' }}>Locked</span>
-                  )}
-                </td>
-                <td>{fmtDate(u.last_login_at)}</td>
-                <td>
-                  <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap' }}>
-                    {editingId === u.id ? (
-                      <>
-                        <button className="btn btn-xs" onClick={handleSaveEdit} disabled={saving}>Save</button>
-                        <button className="btn btn-xs btn-outline" onClick={() => setEditingId(null)}>Cancel</button>
-                      </>
-                    ) : (
-                      <>
-                        <button className="btn btn-xs btn-outline" onClick={() => handleEdit(u)}>Edit</button>
-                        <button className="btn btn-xs btn-outline" onClick={() => { setResetId(u.id); setResetPw(''); }}>Reset PW</button>
-                        {!isSelf(u) && (
-                          <button
-                            className={`btn btn-xs ${u.is_active ? 'btn-outline' : 'btn-success-outline'}`}
-                            onClick={() => handleToggleActive(u)}
-                          >
-                            {u.is_active ? 'Disable' : 'Enable'}
-                          </button>
-                        )}
-                        {u.is_active && !isSelf(u) && (
-                          <button className="btn btn-xs btn-danger-outline" onClick={() => handleDelete(u)}>Delete</button>
-                        )}
-                      </>
-                    )}
-                  </div>
-                </td>
+        {showCreate && (
+          <form className="admin-form-panel" onSubmit={handleCreate}>
+            <div className="admin-form-grid">
+              <div className="form-group">
+                <label>Username *</label>
+                <input type="text" value={newUsername} onChange={(e) => setNewUsername(e.target.value)} required minLength={3} placeholder="min 3 characters" />
+              </div>
+              <div className="form-group">
+                <label>Password *</label>
+                <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} required minLength={12} placeholder="min 12 chars, mixed case, digit, special" />
+              </div>
+              <div className="form-group">
+                <label>Display Name</label>
+                <input type="text" value={newDisplayName} onChange={(e) => setNewDisplayName(e.target.value)} placeholder="Optional" />
+              </div>
+              <div className="form-group">
+                <label>Email</label>
+                <input type="email" value={newEmail} onChange={(e) => setNewEmail(e.target.value)} placeholder="Optional" />
+              </div>
+              <div className="form-group">
+                <label>Role</label>
+                <select value={newRole} onChange={(e) => setNewRole(e.target.value)}>
+                  {ROLES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+                </select>
+              </div>
+            </div>
+            <div className="admin-form-actions">
+              <button type="submit" className="btn btn-sm" disabled={creating || !newUsername.trim() || !newPassword}>
+                {creating ? 'Creating…' : 'Create User'}
+              </button>
+              <button type="button" className="btn btn-sm btn-outline" onClick={() => setShowCreate(false)}>Cancel</button>
+            </div>
+          </form>
+        )}
+      </div>
+
+      {/* ── Users Table ── */}
+      <div className="admin-block">
+        <div className="table-responsive">
+          <table className="admin-table" aria-label="Users">
+            <thead>
+              <tr>
+                <th>Username</th>
+                <th>Display Name</th>
+                <th>Role</th>
+                <th>Status</th>
+                <th>Last Login</th>
+                <th>Actions</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {users.map((u) => (
+                <tr key={u.id} className={u.is_active ? '' : 'admin-row-inactive'}>
+                  <td><strong>{u.username}</strong></td>
+                  <td>
+                    {editingId === u.id ? (
+                      <input type="text" value={editDisplayName} onChange={(e) => setEditDisplayName(e.target.value)} className="admin-inline-input" />
+                    ) : (
+                      u.display_name || '—'
+                    )}
+                  </td>
+                  <td>
+                    {editingId === u.id ? (
+                      <select value={editRole} onChange={(e) => setEditRole(e.target.value)} className="admin-inline-select">
+                        {ROLES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+                      </select>
+                    ) : (
+                      <span className={`admin-role-badge admin-role-${u.role}`}>
+                        {u.role.replace(/_/g, ' ')}
+                      </span>
+                    )}
+                  </td>
+                  <td>
+                    <span className={`db-status-badge ${u.is_active ? 'db-status-success' : 'db-status-failed'}`}>
+                      {u.is_active ? 'Active' : 'Disabled'}
+                    </span>
+                    {u.locked_until && new Date(u.locked_until) > new Date() && (
+                      <span className="db-status-badge db-status-completed_with_errors" style={{ marginLeft: '4px' }}>Locked</span>
+                    )}
+                  </td>
+                  <td className="admin-date-cell">{fmtDate(u.last_login_at)}</td>
+                  <td>
+                    <div className="admin-action-group">
+                      {editingId === u.id ? (
+                        <>
+                          <button className="btn btn-xs" onClick={handleSaveEdit} disabled={saving}>Save</button>
+                          <button className="btn btn-xs btn-outline" onClick={() => setEditingId(null)}>Cancel</button>
+                        </>
+                      ) : (
+                        <>
+                          <button className="btn btn-xs btn-outline" onClick={() => handleEdit(u)}>Edit</button>
+                          <button className="btn btn-xs btn-outline" onClick={() => { setResetId(u.id); setResetPw(''); }}>Reset PW</button>
+                          {!isSelf(u) && (
+                            <button
+                              className={`btn btn-xs ${u.is_active ? 'btn-outline' : 'btn-outline'}`}
+                              onClick={() => handleToggleActive(u)}
+                            >
+                              {u.is_active ? 'Disable' : 'Enable'}
+                            </button>
+                          )}
+                          {u.is_active && !isSelf(u) && (
+                            <button className="btn btn-xs btn-danger-outline" onClick={() => handleDelete(u)}>Delete</button>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {users.length === 0 && (
+                <tr><td colSpan={6} className="admin-empty-cell">No users found.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       {/* Reset password modal */}
       {resetId && (
         <div className="modal-overlay" onClick={() => setResetId(null)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '400px' }}>
-            <h4>Reset Password</h4>
-            <p>User: <strong>{users.find((u) => u.id === resetId)?.username}</strong></p>
-            <input
-              type="password"
-              placeholder="New password (min 12 chars)"
-              value={resetPw}
-              onChange={(e) => setResetPw(e.target.value)}
-              minLength={12}
-              autoFocus
-              style={{ width: '100%', marginBottom: '1rem' }}
-            />
-            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+          <div className="modal-content modal-narrow" onClick={(e) => e.stopPropagation()}>
+            <h4 className="modal-title">Reset Password</h4>
+            <p className="section-desc">
+              User: <strong>{users.find((u) => u.id === resetId)?.username}</strong>
+            </p>
+            <div className="form-group">
+              <label>New Password</label>
+              <input
+                type="password"
+                placeholder="Min 12 chars, mixed case, digit, special"
+                value={resetPw}
+                onChange={(e) => setResetPw(e.target.value)}
+                minLength={12}
+                autoFocus
+              />
+            </div>
+            <div className="modal-actions">
               <button className="btn btn-sm btn-outline" onClick={() => setResetId(null)}>Cancel</button>
               <button className="btn btn-sm" onClick={handleResetPw} disabled={resetting || resetPw.length < 12}>
                 {resetting ? 'Resetting…' : 'Reset Password'}

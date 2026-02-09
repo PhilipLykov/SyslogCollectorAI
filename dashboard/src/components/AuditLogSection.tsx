@@ -81,7 +81,6 @@ export function AuditLogSection({ onAuthError }: Props) {
       from: fromDate || undefined,
       to: toDate || undefined,
     });
-    // Open in new tab with auth header workaround (download via fetch + blob)
     const token = getStoredApiKey();
     fetch(url, { headers: { 'Authorization': `Bearer ${token}` } })
       .then((res) => {
@@ -98,11 +97,23 @@ export function AuditLogSection({ onAuthError }: Props) {
       .catch((err) => setError(err instanceof Error ? err.message : 'Export failed.'));
   };
 
+  const getActionClass = (action: string) => {
+    if (action.includes('fail')) return 'admin-action-fail';
+    if (action.includes('delete') || action.includes('revoke') || action.includes('purge')) return 'admin-action-danger';
+    if (action.includes('create') || action.includes('login')) return 'admin-action-success';
+    return 'admin-action-info';
+  };
+
   return (
-    <div className="settings-section">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-        <h3>Audit Log</h3>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
+    <div className="admin-section">
+      <div className="admin-header-row">
+        <div>
+          <h3 className="section-title">Audit Log</h3>
+          <p className="section-desc">
+            Immutable record of all administrative actions. Entries cannot be modified or deleted.
+          </p>
+        </div>
+        <div className="admin-export-actions">
           <button className="btn btn-sm btn-outline" onClick={() => handleExport('csv')}>Export CSV</button>
           <button className="btn btn-sm btn-outline" onClick={() => handleExport('json')}>Export JSON</button>
         </div>
@@ -110,115 +121,121 @@ export function AuditLogSection({ onAuthError }: Props) {
 
       {error && <div className="error-msg" role="alert">{error}</div>}
 
-      {/* Filters */}
-      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap', alignItems: 'end' }}>
-        <div>
-          <label style={{ fontSize: '0.75em', display: 'block', marginBottom: '2px' }}>Search</label>
+      {/* ── Filters ── */}
+      <div className="admin-filters-bar">
+        <div className="admin-filter-group">
+          <label>Search</label>
           <input
             type="text"
             placeholder="Search..."
             value={searchTerm}
             onChange={(e) => { setSearchTerm(e.target.value); setPage(1); }}
-            style={{ width: '180px' }}
           />
         </div>
-        <div>
-          <label style={{ fontSize: '0.75em', display: 'block', marginBottom: '2px' }}>Action</label>
+        <div className="admin-filter-group">
+          <label>Action</label>
           <select value={actionFilter} onChange={(e) => { setActionFilter(e.target.value); setPage(1); }}>
             <option value="">All Actions</option>
             {actions.map((a) => <option key={a} value={a}>{a}</option>)}
           </select>
         </div>
-        <div>
-          <label style={{ fontSize: '0.75em', display: 'block', marginBottom: '2px' }}>Resource</label>
+        <div className="admin-filter-group">
+          <label>Resource</label>
           <select value={resourceFilter} onChange={(e) => { setResourceFilter(e.target.value); setPage(1); }}>
             <option value="">All Resources</option>
             {resourceTypes.map((r) => <option key={r} value={r}>{r}</option>)}
           </select>
         </div>
-        <div>
-          <label style={{ fontSize: '0.75em', display: 'block', marginBottom: '2px' }}>From</label>
+        <div className="admin-filter-group">
+          <label>From</label>
           <input type="datetime-local" value={fromDate} onChange={(e) => { setFromDate(e.target.value); setPage(1); }} />
         </div>
-        <div>
-          <label style={{ fontSize: '0.75em', display: 'block', marginBottom: '2px' }}>To</label>
+        <div className="admin-filter-group">
+          <label>To</label>
           <input type="datetime-local" value={toDate} onChange={(e) => { setToDate(e.target.value); setPage(1); }} />
         </div>
-        <button className="btn btn-xs btn-outline" onClick={() => {
-          setSearchTerm('');
-          setActionFilter('');
-          setResourceFilter('');
-          setFromDate('');
-          setToDate('');
-          setPage(1);
-        }}>
-          Clear
-        </button>
+        <div className="admin-filter-group admin-filter-action">
+          <button className="btn btn-xs btn-outline" onClick={() => {
+            setSearchTerm('');
+            setActionFilter('');
+            setResourceFilter('');
+            setFromDate('');
+            setToDate('');
+            setPage(1);
+          }}>
+            Clear
+          </button>
+        </div>
       </div>
 
+      {/* ── Table ── */}
       {loading ? (
-        <div className="loading"><div className="spinner" /> Loading audit log…</div>
+        <div className="settings-loading"><div className="spinner" /> Loading audit log…</div>
       ) : data ? (
         <>
-          <div className="table-container">
-            <table>
-              <thead>
-                <tr>
-                  <th>Time</th>
-                  <th>Action</th>
-                  <th>Resource</th>
-                  <th>Actor</th>
-                  <th>IP</th>
-                  <th>Details</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.items.map((entry: AuditLogEntry) => (
-                  <tr key={entry.id}>
-                    <td style={{ whiteSpace: 'nowrap', fontSize: '0.85em' }}>{fmtDate(entry.at)}</td>
-                    <td>
-                      <span className={`badge ${
-                        entry.action.includes('fail') ? 'badge-danger' :
-                        entry.action.includes('delete') || entry.action.includes('revoke') || entry.action.includes('purge') ? 'badge-warning' :
-                        entry.action.includes('create') || entry.action.includes('login') ? 'badge-success' :
-                        'badge-info'
-                      }`}>
-                        {entry.action}
-                      </span>
-                    </td>
-                    <td>{entry.resource_type}{entry.resource_id ? ` (${entry.resource_id.slice(0, 8)}…)` : ''}</td>
-                    <td>{entry.actor ?? entry.user_id?.slice(0, 8) ?? '—'}</td>
-                    <td style={{ fontSize: '0.85em' }}>{entry.ip ?? '—'}</td>
-                    <td>
-                      {entry.details ? (
-                        <button
-                          className="btn btn-xs btn-outline"
-                          onClick={() => setExpandedId(expandedId === entry.id ? null : entry.id)}
-                        >
-                          {expandedId === entry.id ? 'Hide' : 'Show'}
-                        </button>
-                      ) : '—'}
-                      {expandedId === entry.id && entry.details && (
-                        <pre style={{ fontSize: '0.75em', marginTop: '0.5rem', maxWidth: '400px', overflow: 'auto', background: 'var(--bg)', padding: '0.5rem', borderRadius: '4px' }}>
-                          {JSON.stringify(entry.details, null, 2)}
-                        </pre>
-                      )}
-                    </td>
+          <div className="admin-block">
+            <div className="table-responsive">
+              <table className="admin-table" aria-label="Audit Log">
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Action</th>
+                    <th>Resource</th>
+                    <th>Actor</th>
+                    <th>IP</th>
+                    <th>Details</th>
                   </tr>
-                ))}
-                {data.items.length === 0 && (
-                  <tr><td colSpan={6} style={{ textAlign: 'center', padding: '2rem', color: 'var(--muted)' }}>No audit log entries found.</td></tr>
-                )}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {data.items.map((entry: AuditLogEntry) => (
+                    <tr key={entry.id}>
+                      <td className="admin-date-cell">{fmtDate(entry.at)}</td>
+                      <td>
+                        <span className={`admin-action-badge ${getActionClass(entry.action)}`}>
+                          {entry.action}
+                        </span>
+                      </td>
+                      <td>
+                        {entry.resource_type}
+                        {entry.resource_id && (
+                          <span className="admin-resource-id"> ({entry.resource_id.slice(0, 8)}…)</span>
+                        )}
+                      </td>
+                      <td>{entry.actor ?? entry.user_id?.slice(0, 8) ?? '—'}</td>
+                      <td className="admin-date-cell">{entry.ip ?? '—'}</td>
+                      <td>
+                        {entry.details ? (
+                          <>
+                            <button
+                              className="btn btn-xs btn-outline"
+                              onClick={() => setExpandedId(expandedId === entry.id ? null : entry.id)}
+                            >
+                              {expandedId === entry.id ? 'Hide' : 'Show'}
+                            </button>
+                            {expandedId === entry.id && (
+                              <pre className="admin-detail-pre">
+                                {JSON.stringify(entry.details, null, 2)}
+                              </pre>
+                            )}
+                          </>
+                        ) : '—'}
+                      </td>
+                    </tr>
+                  ))}
+                  {data.items.length === 0 && (
+                    <tr><td colSpan={6} className="admin-empty-cell">No audit log entries found.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
 
-          {/* Pagination */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '1rem' }}>
-            <span style={{ fontSize: '0.85em', color: 'var(--muted)' }}>
+          {/* ── Pagination ── */}
+          <div className="admin-pagination">
+            <span className="admin-pagination-info">
               Page {data.page} of {data.total_pages} ({data.total} total entries)
             </span>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <div className="admin-pagination-actions">
               <button
                 className="btn btn-xs btn-outline"
                 disabled={page <= 1}

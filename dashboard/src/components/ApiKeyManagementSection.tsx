@@ -110,7 +110,6 @@ export function ApiKeyManagementSection({ onAuthError }: Props) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      // Fallback
       const ta = document.createElement('textarea');
       ta.value = text;
       document.body.appendChild(ta);
@@ -127,118 +126,138 @@ export function ApiKeyManagementSection({ onAuthError }: Props) {
     return new Date(d).toLocaleString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
   };
 
-  if (loading) return <div className="loading"><div className="spinner" /> Loading API keys…</div>;
+  if (loading) {
+    return (
+      <div className="settings-loading">
+        <div className="spinner" />
+        Loading API keys…
+      </div>
+    );
+  }
 
   return (
-    <div className="settings-section">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-        <h3>API Key Management</h3>
-        <button className="btn btn-sm" onClick={() => { setShowCreate(!showCreate); setCreatedKey(null); }}>
-          {showCreate ? 'Cancel' : '+ Create API Key'}
-        </button>
-      </div>
+    <div className="admin-section">
+      <h3 className="section-title">API Key Management</h3>
+      <p className="section-desc">
+        Create and manage API keys for programmatic access. Keys are shown only once at creation — store them securely.
+      </p>
 
       {error && <div className="error-msg" role="alert">{error}</div>}
       {success && <div className="success-msg" role="status">{success}</div>}
 
-      {/* Show newly created key */}
+      {/* ── Newly Created Key Banner ── */}
       {createdKey && (
-        <div className="success-msg" style={{ padding: '1rem', marginBottom: '1rem', background: 'var(--success-bg, #d4edda)', border: '2px solid var(--success-border, #28a745)', borderRadius: '8px' }}>
-          <strong>API Key Created — Copy it now! It will not be shown again.</strong>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem' }}>
-            <code style={{ flex: 1, padding: '0.5rem', background: 'var(--bg)', borderRadius: '4px', wordBreak: 'break-all', fontSize: '0.85em' }}>
-              {createdKey.plain_key}
-            </code>
+        <div className="admin-key-created-banner">
+          <div className="admin-key-created-title">API Key Created — Copy it now! It will not be shown again.</div>
+          <div className="admin-key-created-row">
+            <code className="admin-key-created-value">{createdKey.plain_key}</code>
             <button className="btn btn-sm" onClick={() => copyToClipboard(createdKey.plain_key)}>
               {copied ? 'Copied!' : 'Copy'}
             </button>
           </div>
-          <button className="btn btn-xs btn-outline" style={{ marginTop: '0.5rem' }} onClick={() => setCreatedKey(null)}>
+          <button className="btn btn-xs btn-outline" onClick={() => setCreatedKey(null)} style={{ marginTop: '8px' }}>
             Dismiss
           </button>
         </div>
       )}
 
-      {showCreate && (
-        <form className="settings-form" onSubmit={handleCreate} style={{ marginBottom: '1.5rem', padding: '1rem', border: '1px solid var(--border)', borderRadius: '8px' }}>
-          <h4>Create New API Key</h4>
-          <div className="form-row">
-            <label>Name *</label>
-            <input type="text" value={newName} onChange={(e) => setNewName(e.target.value)} required placeholder="e.g., Syslog Forwarder" />
-          </div>
-          <div className="form-row">
-            <label>Scope *</label>
-            <select value={newScope} onChange={(e) => setNewScope(e.target.value)}>
-              {SCOPES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
-            </select>
-          </div>
-          <div className="form-row">
-            <label>Description</label>
-            <input type="text" value={newDescription} onChange={(e) => setNewDescription(e.target.value)} placeholder="Optional description" />
-          </div>
-          <div className="form-row">
-            <label>Expires At</label>
-            <input type="datetime-local" value={newExpires} onChange={(e) => setNewExpires(e.target.value)} />
-          </div>
-          <button type="submit" className="btn" disabled={creating || !newName.trim()}>
-            {creating ? 'Creating…' : 'Create API Key'}
-          </button>
-        </form>
-      )}
+      {/* ── Create Key ── */}
+      <div className="admin-block">
+        <button type="button" className="prompt-toggle" onClick={() => { setShowCreate(!showCreate); setCreatedKey(null); }}>
+          <span className={`prompt-chevron${showCreate ? ' open' : ''}`}>&#9654;</span>
+          Create New API Key
+          <span className="prompt-custom-badge">{keys.length} key(s)</span>
+        </button>
 
-      <div className="table-container">
-        <table>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Scope</th>
-              <th>Description</th>
-              <th>Status</th>
-              <th>Created By</th>
-              <th>Expires</th>
-              <th>Last Used</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {keys.map((k) => (
-              <tr key={k.id} style={{ opacity: k.is_active ? 1 : 0.5 }}>
-                <td><strong>{k.name}</strong></td>
-                <td><span className="badge badge-info">{k.scope}</span></td>
-                <td>{k.description || '—'}</td>
-                <td>
-                  <span className={`badge ${k.is_active ? 'badge-success' : 'badge-muted'}`}>
-                    {k.is_active ? 'Active' : 'Revoked'}
-                  </span>
-                  {k.expires_at && new Date(k.expires_at) < new Date() && (
-                    <span className="badge badge-warning" style={{ marginLeft: '0.3rem' }}>Expired</span>
-                  )}
-                </td>
-                <td>{k.created_by_username || '—'}</td>
-                <td>{fmtDate(k.expires_at)}</td>
-                <td>{fmtDate(k.last_used_at)}</td>
-                <td>
-                  <div style={{ display: 'flex', gap: '0.3rem' }}>
-                    <button
-                      className={`btn btn-xs ${k.is_active ? 'btn-outline' : 'btn-success-outline'}`}
-                      onClick={() => handleToggleActive(k)}
-                    >
-                      {k.is_active ? 'Disable' : 'Enable'}
-                    </button>
-                    {k.is_active && (
-                      <button className="btn btn-xs btn-danger-outline" onClick={() => handleRevoke(k)}>
-                        Revoke
-                      </button>
-                    )}
-                  </div>
-                </td>
+        {showCreate && (
+          <form className="admin-form-panel" onSubmit={handleCreate}>
+            <div className="admin-form-grid">
+              <div className="form-group">
+                <label>Name *</label>
+                <input type="text" value={newName} onChange={(e) => setNewName(e.target.value)} required placeholder="e.g., Syslog Forwarder" />
+              </div>
+              <div className="form-group">
+                <label>Scope *</label>
+                <select value={newScope} onChange={(e) => setNewScope(e.target.value)}>
+                  {SCOPES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+                </select>
+              </div>
+              <div className="form-group">
+                <label>Description</label>
+                <input type="text" value={newDescription} onChange={(e) => setNewDescription(e.target.value)} placeholder="Optional description" />
+              </div>
+              <div className="form-group">
+                <label>Expires At</label>
+                <input type="datetime-local" value={newExpires} onChange={(e) => setNewExpires(e.target.value)} />
+                <span className="field-hint">Leave empty for no expiration.</span>
+              </div>
+            </div>
+            <div className="admin-form-actions">
+              <button type="submit" className="btn btn-sm" disabled={creating || !newName.trim()}>
+                {creating ? 'Creating…' : 'Create API Key'}
+              </button>
+              <button type="button" className="btn btn-sm btn-outline" onClick={() => setShowCreate(false)}>Cancel</button>
+            </div>
+          </form>
+        )}
+      </div>
+
+      {/* ── Keys Table ── */}
+      <div className="admin-block">
+        <div className="table-responsive">
+          <table className="admin-table" aria-label="API Keys">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Scope</th>
+                <th>Description</th>
+                <th>Status</th>
+                <th>Created By</th>
+                <th>Expires</th>
+                <th>Last Used</th>
+                <th>Actions</th>
               </tr>
-            ))}
-            {keys.length === 0 && (
-              <tr><td colSpan={8} style={{ textAlign: 'center', padding: '2rem', color: 'var(--muted)' }}>No API keys found.</td></tr>
-            )}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {keys.map((k) => (
+                <tr key={k.id} className={k.is_active ? '' : 'admin-row-inactive'}>
+                  <td><strong>{k.name}</strong></td>
+                  <td>
+                    <span className={`admin-scope-badge admin-scope-${k.scope}`}>{k.scope}</span>
+                  </td>
+                  <td className="admin-desc-cell">{k.description || '—'}</td>
+                  <td>
+                    <span className={`db-status-badge ${k.is_active ? 'db-status-success' : 'db-status-failed'}`}>
+                      {k.is_active ? 'Active' : 'Revoked'}
+                    </span>
+                    {k.expires_at && new Date(k.expires_at) < new Date() && (
+                      <span className="db-status-badge db-status-completed_with_errors" style={{ marginLeft: '4px' }}>Expired</span>
+                    )}
+                  </td>
+                  <td>{k.created_by_username || '—'}</td>
+                  <td className="admin-date-cell">{fmtDate(k.expires_at)}</td>
+                  <td className="admin-date-cell">{fmtDate(k.last_used_at)}</td>
+                  <td>
+                    <div className="admin-action-group">
+                      <button
+                        className="btn btn-xs btn-outline"
+                        onClick={() => handleToggleActive(k)}
+                      >
+                        {k.is_active ? 'Disable' : 'Enable'}
+                      </button>
+                      {k.is_active && (
+                        <button className="btn btn-xs btn-danger-outline" onClick={() => handleRevoke(k)}>Revoke</button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {keys.length === 0 && (
+                <tr><td colSpan={8} className="admin-empty-cell">No API keys found.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );

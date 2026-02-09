@@ -6,157 +6,209 @@ This guide walks you through installing SyslogCollectorAI from start to finish. 
 
 ## Table of Contents
 
-1. [Prerequisites](#1-prerequisites)
-2. [Docker Deployment (Recommended)](#2-docker-deployment-recommended)
-3. [Standalone Deployment (Without Docker)](#3-standalone-deployment-without-docker)
-4. [First Login](#4-first-login)
+1. [Quick Start (Docker)](#1-quick-start-docker)
+2. [Accessing the Dashboard](#2-accessing-the-dashboard)
+3. [Docker Deployment — Detailed](#3-docker-deployment--detailed)
+4. [Standalone Deployment (Without Docker)](#4-standalone-deployment-without-docker)
 5. [Configuring Your First Monitored System](#5-configuring-your-first-monitored-system)
 6. [Connecting Log Sources](#6-connecting-log-sources)
-7. [Syslog Forwarder Setup (rsyslog)](#7-syslog-forwarder-setup-rsyslog)
+7. [Syslog Forwarder Setup (rsyslog + Python)](#7-syslog-forwarder-setup-rsyslog--python)
 8. [Log Shipper Integration](#8-log-shipper-integration)
 9. [LLM Configuration](#9-llm-configuration)
 10. [Alerting Setup](#10-alerting-setup)
 11. [Backup & Maintenance](#11-backup--maintenance)
 12. [Upgrading](#12-upgrading)
 13. [Troubleshooting](#13-troubleshooting)
+14. [Environment Variable Reference](#14-environment-variable-reference)
 
 ---
 
-## 1. Prerequisites
+## 1. Quick Start (Docker)
 
-### Required
+Get up and running in under 5 minutes. Docker Compose includes everything: PostgreSQL, the backend API, and the dashboard.
 
-| Component | Minimum Version | Notes |
-|-----------|----------------|-------|
-| **PostgreSQL** | 14+ | Can be on same or separate server |
-| **OpenAI-compatible API** | Any | OpenAI, Azure OpenAI, Ollama, LM Studio, etc. |
+### Prerequisites
 
-### For Docker deployment
+- **Docker** 20.10+ with **Docker Compose** v2
+- An **OpenAI API key** (or any OpenAI-compatible API key)
 
-| Component | Minimum Version |
-|-----------|----------------|
-| **Docker** | 20.10+ |
-| **Docker Compose** | 2.0+ (V2 plugin) |
-
-### For standalone deployment
-
-| Component | Minimum Version |
-|-----------|----------------|
-| **Node.js** | 20+ (22 recommended) |
-| **npm** | 9+ |
-
-### Network Requirements
-
-| Port | Service | Direction |
-|------|---------|-----------|
-| `3000` | Backend API | Inbound from dashboard and log shippers |
-| `8070` | Dashboard UI | Inbound from user browsers |
-| `5432` | PostgreSQL | Backend to database |
-| `443` | OpenAI API | Outbound from backend to LLM provider |
-
----
-
-## 2. Docker Deployment (Recommended)
-
-This is the simplest way to get started. You need Docker and an external PostgreSQL database.
-
-### Step 1: Clone the repository
+### Steps
 
 ```bash
+# 1. Clone the repository
 git clone https://github.com/PhilipLykov/SyslogCollectorAI.git
-cd SyslogCollectorAI
+cd SyslogCollectorAI/docker
+
+# 2. Create your configuration
+cp .env.example .env
+
+# 3. Edit .env — you only NEED to set two values:
+#    DB_PASSWORD=<pick-a-strong-database-password>
+#    OPENAI_API_KEY=<your-openai-api-key>
+
+# 4. Build and start all services
+docker compose up -d --build
+
+# 5. Check the backend logs for your admin credentials
+docker compose logs backend | grep -A 5 "BOOTSTRAP"
 ```
 
-### Step 2: Create the PostgreSQL database
+Open **http://localhost:8070** in your browser and log in with the credentials from step 5.
 
-Connect to your PostgreSQL server and run:
+> **That's it!** PostgreSQL, the backend, and the dashboard are all running. Continue reading for detailed configuration, LAN/remote access, or advanced topics.
 
-```sql
-CREATE DATABASE syslog_collector_ai;
-CREATE USER syslog_ai WITH PASSWORD 'your_strong_password_here';
-GRANT ALL PRIVILEGES ON DATABASE syslog_collector_ai TO syslog_ai;
+---
 
--- Connect to the new database
-\c syslog_collector_ai
+## 2. Accessing the Dashboard
 
--- Grant schema permissions (required for migrations)
-GRANT CREATE ON SCHEMA public TO syslog_ai;
+### First Login
+
+1. Open the dashboard URL in your browser (default: `http://localhost:8070`).
+2. Enter the admin credentials displayed in the backend startup logs.
+3. If the password was auto-generated, you will be prompted to set a new password immediately.
+   - Requirements: at least **12 characters**, with uppercase, lowercase, digit, and special character.
+4. After login, you will see the main dashboard.
+
+### Setting a Custom Admin Password
+
+To avoid the auto-generated password, set these in your `.env` before the first start:
+
+```bash
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=YourSecurePassword123!
 ```
 
-### Step 3: Configure environment
+> **Important**: These only take effect on the very first startup (when no users exist in the database). If users already exist, changing these variables has no effect. To reset, see [Troubleshooting > Cannot log in](#cannot-log-in).
+
+### Accessing from Another Machine (LAN/Remote)
+
+If you want to access the dashboard from another computer on your network, edit `.env` before building:
+
+```bash
+# Replace with your server's IP address
+VITE_API_URL=http://192.168.1.100:3000
+CORS_ORIGIN=http://192.168.1.100:8070
+```
+
+Then rebuild the dashboard (the URL is baked in at build time):
+
+```bash
+docker compose up -d --build dashboard
+```
+
+---
+
+## 3. Docker Deployment — Detailed
+
+### What's Included
+
+The `docker-compose.yml` runs three services:
+
+| Service | Image | Port | Description |
+|---------|-------|------|-------------|
+| **postgres** | `postgres:16-alpine` | 5432 (localhost only) | PostgreSQL database with health checks |
+| **backend** | Custom (Node.js 22) | 3000 | API server + AI analysis pipeline |
+| **dashboard** | Custom (nginx) | 8070 | React web interface |
+
+Data is stored in Docker named volumes:
+- `pgdata` — PostgreSQL database files (persistent across restarts/rebuilds)
+- `backups` — Database backup files
+
+### All Configuration Options
+
+Copy `.env.example` to `.env` and edit:
 
 ```bash
 cd docker
 cp .env.example .env
 ```
 
-Edit `.env` with your settings:
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `DB_PASSWORD` | **Yes** | — | Database password (pick any strong password) |
+| `OPENAI_API_KEY` | **Yes** | — | OpenAI (or compatible) API key |
+| `DB_NAME` | No | `syslog_collector_ai` | Database name |
+| `DB_USER` | No | `syslog_ai` | Database username |
+| `OPENAI_MODEL` | No | `gpt-4o-mini` | LLM model name |
+| `VITE_API_URL` | No | `http://localhost:3000` | Backend URL as seen by the browser |
+| `DASHBOARD_PORT` | No | `8070` | Dashboard listen port |
+| `CORS_ORIGIN` | No | `http://localhost:8070` | Allowed CORS origin |
+| `PORT` | No | `3000` | Backend listen port |
+| `ADMIN_USERNAME` | No | `admin` | Initial admin username |
+| `ADMIN_PASSWORD` | No | *(auto-generated)* | Initial admin password (min 12 chars) |
+| `PIPELINE_INTERVAL_MS` | No | `300000` | AI pipeline interval (ms) |
+| `REDACTION_ENABLED` | No | `false` | Strip secrets before storage |
+| `TZ` | No | `Europe/Chisinau` | Application timezone |
+| `DB_EXTERNAL_PORT` | No | `127.0.0.1:5432` | Expose PostgreSQL to host network |
+
+### Managing the Stack
 
 ```bash
-# ── Database ──────────────────────────────────────────────────
-DB_HOST=192.168.1.100          # Your PostgreSQL server IP
+# Start all services
+docker compose up -d
+
+# View logs (all services)
+docker compose logs -f
+
+# View backend logs only
+docker compose logs -f backend
+
+# Stop all services
+docker compose down
+
+# Stop and remove ALL data (database, backups — destructive!)
+docker compose down -v
+
+# Rebuild after code changes
+docker compose up -d --build
+```
+
+### Using an External PostgreSQL Database
+
+If you already have a PostgreSQL server and prefer not to use the bundled one, you can override the database connection. In your `.env`:
+
+```bash
+DB_HOST=192.168.1.100
 DB_PORT=5432
 DB_NAME=syslog_collector_ai
 DB_USER=syslog_ai
-DB_PASSWORD=your_strong_password_here
-
-# ── LLM ──────────────────────────────────────────────────────
-OPENAI_API_KEY=sk-...          # Your OpenAI API key
-OPENAI_MODEL=gpt-4o-mini       # Recommended for cost-efficiency
-
-# ── Dashboard URL (how your browser reaches the backend) ─────
-VITE_API_URL=http://192.168.1.100:3000
-DASHBOARD_PORT=8070
-
-# ── CORS (set to your dashboard URL) ─────────────────────────
-CORS_ORIGIN=http://192.168.1.100:8070
-
-# ── Optional: Bootstrap admin credentials ─────────────────────
-# If not set, a random password is generated and printed to logs
-# ADMIN_USERNAME=admin
-# ADMIN_PASSWORD=YourSecureAdminPassword123!
+DB_PASSWORD=your_password
 ```
 
-> **Important**: Replace `192.168.1.100` with the actual IP address or hostname of your server as accessible from your browser.
+Then create a `docker-compose.override.yml` to disable the bundled PostgreSQL:
 
-### Step 4: Build and start
-
-```bash
-docker compose build
-docker compose up -d
+```yaml
+services:
+  postgres:
+    profiles: ["disabled"]
+  backend:
+    depends_on: []
+    environment:
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT:-5432}
 ```
 
-### Step 5: Verify startup
+Ensure the external database exists and the user has `CREATE` permission on the `public` schema:
 
-```bash
-# Check both containers are running
-docker compose ps
-
-# Check backend logs for successful startup and admin credentials
-docker logs docker-backend-1 2>&1 | grep -A 5 "BOOTSTRAP"
+```sql
+CREATE DATABASE syslog_collector_ai;
+CREATE USER syslog_ai WITH PASSWORD 'your_password';
+GRANT ALL PRIVILEGES ON DATABASE syslog_collector_ai TO syslog_ai;
+\c syslog_collector_ai
+GRANT CREATE ON SCHEMA public TO syslog_ai;
 ```
-
-You should see output like:
-
-```
-┌──────────────────────────────────────────────────────────┐
-│  BOOTSTRAP ADMIN ACCOUNT (save these credentials!):      │
-│  Username: admin                                         │
-│  Password: xK7mN2pQ9wR4tY6u!A1a                         │
-└──────────────────────────────────────────────────────────┘
-```
-
-**Save these credentials.** You will need them to log in.
-
-### Step 6: Access the dashboard
-
-Open `http://your-server:8070` in your browser and proceed to [First Login](#4-first-login).
 
 ---
 
-## 3. Standalone Deployment (Without Docker)
+## 4. Standalone Deployment (Without Docker)
 
 Use this method if you prefer to run Node.js directly on your server.
+
+### Prerequisites
+
+- **Node.js** 20+ (22 recommended)
+- **npm** 9+
+- **PostgreSQL** 14+
 
 ### Step 1: Clone and install dependencies
 
@@ -164,19 +216,20 @@ Use this method if you prefer to run Node.js directly on your server.
 git clone https://github.com/PhilipLykov/SyslogCollectorAI.git
 cd SyslogCollectorAI
 
-# Install backend dependencies
-cd backend
-npm install
-
-# Install dashboard dependencies
-cd ../dashboard
-npm install
+cd backend && npm install
+cd ../dashboard && npm install
 cd ..
 ```
 
 ### Step 2: Create the PostgreSQL database
 
-Same as [Docker Step 2](#step-2-create-the-postgresql-database) above.
+```sql
+CREATE DATABASE syslog_collector_ai;
+CREATE USER syslog_ai WITH PASSWORD 'your_strong_password_here';
+GRANT ALL PRIVILEGES ON DATABASE syslog_collector_ai TO syslog_ai;
+\c syslog_collector_ai
+GRANT CREATE ON SCHEMA public TO syslog_ai;
+```
 
 ### Step 3: Configure the backend
 
@@ -185,28 +238,7 @@ cd backend
 cp .env.example .env
 ```
 
-Edit `.env`:
-
-```bash
-HOST=0.0.0.0
-PORT=3000
-
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=syslog_collector_ai
-DB_USER=syslog_ai
-DB_PASSWORD=your_strong_password_here
-
-OPENAI_API_KEY=sk-...
-OPENAI_MODEL=gpt-4o-mini
-
-REDACTION_ENABLED=false
-TZ=Europe/Chisinau
-
-# Optional: set admin credentials
-# ADMIN_USERNAME=admin
-# ADMIN_PASSWORD=YourSecureAdminPassword123!
-```
+Edit `.env` with your database credentials and API key. See the [Environment Variable Reference](#14-environment-variable-reference) for all options.
 
 ### Step 4: Start the backend
 
@@ -225,18 +257,10 @@ On first start, the backend will:
 
 ```bash
 cd dashboard
-
-# Set the backend URL (adjust to your server)
-export VITE_API_URL=http://localhost:3000
-
-# Build the static files
-npm run build
-
-# Serve with any static file server, for example:
-npx serve -s dist -l 8070
+VITE_API_URL=http://localhost:3000 npm run build
 ```
 
-For production, use nginx or a similar web server to serve the `dashboard/dist` folder. Example nginx config:
+Serve the `dashboard/dist/` folder with any web server. Example with nginx:
 
 ```nginx
 server {
@@ -250,27 +274,11 @@ server {
 }
 ```
 
-### Step 6: Access the dashboard
+Or for quick testing:
 
-Open `http://your-server:8070` in your browser.
-
----
-
-## 4. First Login
-
-1. Open the dashboard URL in your browser (`http://your-server:8070`).
-2. You will see a login form with username and password fields.
-3. Enter the admin credentials from the startup logs (see Step 5 of your deployment method).
-4. If the password was auto-generated, you will be immediately prompted to set a new password.
-   - The new password must be at least **12 characters** with uppercase, lowercase, digit, and special character.
-5. After login, you will see the main dashboard.
-
-> **Can't find the password?** Run `docker logs docker-backend-1 2>&1 | grep -A 5 "BOOTSTRAP"` to see it again. If the logs have been rotated, you can reset by deleting all users from the database and restarting the backend:
-> ```bash
-> docker exec -it docker-postgres-1 psql -U syslog_ai -d syslog_collector_ai \
->   -c "DELETE FROM sessions; DELETE FROM users;"
-> docker restart docker-backend-1
-> ```
+```bash
+npx serve -s dist -l 8070
+```
 
 ---
 
@@ -287,25 +295,30 @@ After logging in, go to **Settings > Systems & Sources**.
 
 ### Add a log source
 
-Log sources define rules for matching incoming events to your system using regex patterns on event fields.
+Log sources use regex-based selectors to match incoming events to your system.
 
 1. Select your new system in the left panel.
 2. Click **+ Add Source**.
 3. Set a label (e.g., `All events from 192.168.1.x`).
-4. Define the selector — a set of field-matching rules:
-   - `{"source_ip": "^192\\.168\\.1\\."}` — matches events from the 192.168.1.x subnet
-   - `{"host": "^prod-server"}` — matches events from hosts starting with "prod-server"
-   - `{"host": ".*"}` — catch-all: matches everything
+4. Define the selector — a JSON object of field-matching rules:
+
+| Selector | Matches |
+|----------|---------|
+| `{"source_ip": "^192\\.168\\.1\\."}` | Events from the 192.168.1.x subnet |
+| `{"host": "^prod-server"}` | Hosts starting with "prod-server" |
+| `{"program": "^nginx"}` | Events from nginx |
+| `{"host": ".*"}` | Everything (catch-all) |
+
 5. Set priority (lower number = evaluated first). Use low priorities for specific rules and higher (e.g., 100) for catch-all rules.
 6. Click **Save**.
 
-> **Tip**: Expand the "How selectors work" section on the settings page for more examples and explanation.
+> **Tip**: Expand the "How selectors work" section on the settings page for more examples.
 
 ---
 
 ## 6. Connecting Log Sources
 
-Before events can appear in the dashboard, you need to send them to the ingest API.
+Before events appear in the dashboard, you need to send them to the ingest API.
 
 ### Create an API key for ingestion
 
@@ -316,22 +329,20 @@ Before events can appear in the dashboard, you need to send them to the ingest A
 
 ### Test ingestion
 
-Send a test event using curl:
-
 ```bash
-curl -X POST http://your-server:3000/api/v1/ingest \
+curl -X POST http://localhost:3000/api/v1/ingest \
   -H "Content-Type: application/json" \
   -H "X-API-Key: YOUR_INGEST_KEY" \
   -d '{"events": [{"message": "Test event from curl", "host": "test-host", "severity": "info"}]}'
 ```
 
-If configured correctly, you should see the event appear in the Event Explorer within seconds.
+If configured correctly, the event will appear in the Event Explorer within seconds.
 
 ---
 
-## 7. Syslog Forwarder Setup (rsyslog)
+## 7. Syslog Forwarder Setup (rsyslog + Python)
 
-This section explains how to forward local syslog events from a Linux server to SyslogCollectorAI.
+This section explains how to forward local syslog events from a Linux server.
 
 ### Step 1: Configure rsyslog to write JSON
 
@@ -360,8 +371,6 @@ if $programname != 'syslog-forwarder.py' then {
     action(type="omfile" file="/var/log/syslog-ai.jsonl" template="SyslogAiJson")
 }
 ```
-
-Restart rsyslog:
 
 ```bash
 sudo systemctl restart rsyslog
@@ -405,7 +414,6 @@ def main():
         log("ERROR: API_KEY not set"); sys.exit(1)
     log(f"Starting: file={JSONL_PATH} api={API_URL} batch={BATCH_SIZE}")
 
-    # Start from end of file
     try:
         pos = os.path.getsize(JSONL_PATH)
     except FileNotFoundError:
@@ -440,8 +448,6 @@ if __name__ == "__main__":
     main()
 ```
 
-Make it executable:
-
 ```bash
 chmod +x /opt/syslog-forwarder/syslog-forwarder.py
 ```
@@ -472,18 +478,10 @@ StandardError=journal
 WantedBy=multi-user.target
 ```
 
-Enable and start:
-
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now syslog-forwarder
 sudo systemctl status syslog-forwarder
-```
-
-Check logs:
-
-```bash
-journalctl -u syslog-forwarder --no-pager -n 20
 ```
 
 ---
@@ -493,7 +491,7 @@ journalctl -u syslog-forwarder --no-pager -n 20
 The ingest API accepts three JSON formats:
 - `{ "events": [...] }` — batch format (recommended)
 - `[{...}, {...}]` — bare JSON array
-- `{ "message": "...", ... }` — single event object
+- `{ "message": "...", ... }` — single event
 
 ### Fluent Bit
 
@@ -539,7 +537,7 @@ output {
 | Field | Required | Description |
 |-------|----------|-------------|
 | `message` / `msg` / `short_message` | **Yes** | Log message content |
-| `timestamp` / `time` / `@timestamp` | No | ISO 8601 or Unix epoch (auto-detected) |
+| `timestamp` / `time` / `@timestamp` | No | ISO 8601 or Unix epoch |
 | `severity` / `level` | No | Syslog severity name or number (0-7) |
 | `host` / `hostname` / `source` | No | Originating hostname |
 | `source_ip` / `fromhost_ip` / `ip` | No | Source IP address |
@@ -549,54 +547,54 @@ output {
 | `trace_id` / `traceId` | No | Distributed trace ID |
 | `span_id` / `spanId` | No | Span ID |
 
-Unknown fields are preserved in a `raw` JSON column for reference.
+Unknown fields are preserved in a `raw` JSON column.
 
 ---
 
 ## 9. LLM Configuration
 
-After login, go to **Settings > AI Model** to configure:
+Go to **Settings > AI Model** after login.
 
-- **Model**: Select the LLM model (e.g., `gpt-4o-mini` for cost-efficiency, `gpt-4o` for higher quality)
-- **API Key**: Configured via the `OPENAI_API_KEY` environment variable
-- **API Base URL**: For non-OpenAI providers (Ollama, LM Studio, Azure), set the base URL
-- **Temperature**: Controls response randomness (0.0 = deterministic, 1.0 = creative). Recommended: 0.1-0.3
-- **System Prompts**: Edit the scoring, meta-analysis, and RAG prompts
-- **Per-Criterion Prompts**: Fine-tune each of the 6 scoring criteria independently
-- **Token Optimization**: Enable score caching, severity filtering, message truncation, and batch sizing
+| Setting | Description | Recommended |
+|---------|-------------|-------------|
+| **Model** | LLM model name | `gpt-4o-mini` (cost), `gpt-4o` (quality) |
+| **API Base URL** | For non-OpenAI (Ollama, LM Studio, Azure) | — |
+| **Temperature** | Randomness (0.0-1.0) | 0.1-0.3 |
+| **System Prompts** | Scoring, meta-analysis, RAG prompts | Edit to match your domain |
+| **Per-Criterion Prompts** | Individual instructions for each of the 6 criteria | Fine-tune for your environment |
+| **Token Optimization** | Caching, filtering, truncation, batch size | Enable all for cost savings |
 
-The AI pipeline runs automatically every 5 minutes (configurable via `PIPELINE_INTERVAL_MS` environment variable).
+The AI pipeline runs every 5 minutes by default (configurable via `PIPELINE_INTERVAL_MS`).
 
 ---
 
 ## 10. Alerting Setup
 
-Go to **Settings > Notifications** to configure alerting.
+Go to **Settings > Notifications**.
 
 ### Step 1: Create a notification channel
 
-Supported channels: **Webhook**, **Pushover**, **NTfy**, **Gotify**, **Telegram**.
+| Channel | Required Config | Notes |
+|---------|----------------|-------|
+| **Webhook** | `url` | POST JSON to any URL |
+| **Pushover** | `token_ref`, `user_key` | Use `env:PUSHOVER_TOKEN` format |
+| **NTfy** | `base_url`, `topic` | Topic should be unguessable |
+| **Gotify** | `base_url`, `token_ref` | Use `env:GOTIFY_APP_TOKEN` format |
+| **Telegram** | `token_ref`, `chat_id` | Use `env:TELEGRAM_BOT_TOKEN` format |
 
-For each channel, provide the required configuration. Secrets should be referenced as environment variables using the `env:VAR_NAME` format.
-
-Example for Telegram:
-- Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in your `.env` file
-- In the channel config, use `env:TELEGRAM_BOT_TOKEN` as the token reference
+All `*_ref` fields use `env:VAR_NAME` format to reference environment variables — secrets are never stored in the database.
 
 Click **Test** to verify the channel works.
 
 ### Step 2: Create alert rules
 
-Define rules that trigger notifications when scores exceed thresholds:
-- Select which criteria to monitor
-- Set score thresholds (e.g., alert when IT Security > 50%)
+- Select criteria to monitor and set score thresholds
 - Choose notification channels
-- Configure throttle interval (prevent alert storms)
-- Enable recovery alerts (notify when scores drop back below threshold)
+- Configure throttle interval and recovery alerts
 
 ### Step 3: Manage silences
 
-Create silence windows to temporarily suppress notifications during maintenance.
+Create silence windows to suppress notifications during maintenance.
 
 ---
 
@@ -604,27 +602,18 @@ Create silence windows to temporarily suppress notifications during maintenance.
 
 ### Database Backup
 
-Go to **Settings > Database** and expand the **Backup Configuration** section:
+Go to **Settings > Database > Backup Configuration**:
 
-- **Schedule**: Set how often backups run (e.g., daily)
-- **Format**: Choose between custom binary (smaller, faster restore) or plain SQL (human-readable)
+- **Schedule**: How often backups run (e.g., daily)
+- **Format**: Custom binary (smaller) or plain SQL (human-readable)
 - **Retention**: How many backup files to keep
-- **Manual Trigger**: Run a backup immediately
-- **Download**: Download any backup file directly from the UI
-
-Backup files are stored in the `./docker/backups/` directory (Docker) or `/app/data/backups/` (standalone).
+- **Actions**: Manual trigger, download, delete from UI
 
 ### Data Retention
 
-Configure automatic cleanup of old events:
-
-- **Global retention**: Set a default retention period for all systems
-- **Per-system retention**: Override for individual systems (e.g., 30 days for debug logs, 365 days for security events)
-- **Maintenance schedule**: Automatic VACUUM ANALYZE and REINDEX for database health
-
-### Session Cleanup
-
-Expired user sessions are automatically cleaned up by the maintenance job.
+- **Global**: Default retention for all systems
+- **Per-system**: Override per system (e.g., 30 days for debug, 365 for security)
+- **Maintenance**: Automatic VACUUM ANALYZE and REINDEX
 
 ---
 
@@ -636,11 +625,10 @@ Expired user sessions are automatically cleaned up by the maintenance job.
 cd SyslogCollectorAI
 git pull
 cd docker
-docker compose build
-docker compose up -d
+docker compose up -d --build
 ```
 
-Database migrations run automatically on startup — no manual steps needed.
+Database migrations run automatically — no manual steps needed.
 
 ### Standalone
 
@@ -665,13 +653,12 @@ VITE_API_URL=http://your-server:3000 npm run build
 
 ### Events not appearing in the dashboard
 
-1. **Check log source selectors**: Go to Settings > Systems & Sources. Make sure the selector fields match your incoming events. For example, if events have `source_ip: "127.0.0.1"`, the selector must match that: `{"source_ip": "127.0.0.1"}` or `{"source_ip": ".*"}`.
+1. **Check log source selectors**: Go to Settings > Systems & Sources. Ensure selectors match your events. For example, if events have `source_ip: "127.0.0.1"`, use `{"source_ip": "127.0.0.1"}` or `{"source_ip": ".*"}`.
 
-2. **Check the forwarder logs**:
+2. **Check the forwarder**:
    ```bash
    journalctl -u syslog-forwarder --no-pager -n 20
    ```
-   Look for `HTTP Error 400` or `HTTP Error 401`.
 
 3. **Test ingestion manually**:
    ```bash
@@ -683,50 +670,63 @@ VITE_API_URL=http://your-server:3000 npm run build
 
 ### Cannot log in
 
-- If you forgot the admin password, reset it by deleting users from the database (see [First Login](#4-first-login)).
-- Check that the backend is running: `docker compose ps` or check the process.
-- Verify the dashboard can reach the backend: the `VITE_API_URL` must be accessible from your browser.
+If you forgot the admin password, reset by deleting users from the database:
+
+```bash
+# Docker (with bundled PostgreSQL)
+docker compose exec postgres psql -U syslog_ai -d syslog_collector_ai \
+  -c "DELETE FROM sessions; DELETE FROM users;"
+docker compose restart backend
+
+# Then check logs for new credentials:
+docker compose logs backend | grep -A 5 "BOOTSTRAP"
+```
 
 ### Backend fails to start
 
-- Check database connectivity: ensure PostgreSQL is running and accessible from the backend container/host.
-- Check logs: `docker logs docker-backend-1` or check stdout.
-- Verify environment variables are set correctly in `.env`.
+- Check logs: `docker compose logs backend`
+- Verify PostgreSQL is healthy: `docker compose ps`
+- Ensure `.env` has valid `DB_PASSWORD` and `OPENAI_API_KEY`
+
+### Dashboard shows "Network Error"
+
+- The `VITE_API_URL` in `.env` must be reachable from your browser (not from the container).
+- For LAN access, use the server's IP address, not `localhost`.
+- After changing `VITE_API_URL`, rebuild: `docker compose up -d --build dashboard`
 
 ### High LLM costs
 
-- Go to Settings > AI Model > Token Optimization.
-- Enable **Score caching** (reuses scores for similar messages).
-- Enable **Severity pre-filtering** to skip scoring debug/info events.
-- Reduce **Scoring batch size** to limit tokens per request.
-- Switch to a cheaper model like `gpt-4o-mini`.
+- Settings > AI Model > Token Optimization: enable caching, severity filtering, batch sizing
+- Switch to `gpt-4o-mini` if using a more expensive model
 
 ### Backup fails with "Permission denied"
 
-The backup directory needs write permissions for the backend process:
-- Docker: ensure `./docker/backups/` directory exists and is writable. The entrypoint script handles this automatically.
-- Standalone: ensure `/app/data/backups/` is writable by the Node.js process.
+Docker: the entrypoint script automatically fixes permissions. If issues persist:
+```bash
+docker compose exec backend sh -c "ls -la /app/data/backups/"
+```
 
 ---
 
-## Environment Variable Reference
+## 14. Environment Variable Reference
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `DB_HOST` | Yes | - | PostgreSQL hostname |
+| `DB_PASSWORD` | **Yes** | — | PostgreSQL password |
+| `OPENAI_API_KEY` | **Yes** | — | OpenAI (or compatible) API key |
+| `DB_NAME` | No | `syslog_collector_ai` | Database name |
+| `DB_USER` | No | `syslog_ai` | Database username |
+| `DB_HOST` | No | `postgres` (Docker) | PostgreSQL hostname |
 | `DB_PORT` | No | `5432` | PostgreSQL port |
-| `DB_NAME` | Yes | - | Database name |
-| `DB_USER` | Yes | - | Database username |
-| `DB_PASSWORD` | Yes | - | Database password |
-| `OPENAI_API_KEY` | Yes | - | OpenAI (or compatible) API key |
 | `OPENAI_MODEL` | No | `gpt-4o-mini` | LLM model name |
 | `PORT` | No | `3000` | Backend listen port |
 | `HOST` | No | `0.0.0.0` | Backend bind address |
-| `DASHBOARD_PORT` | No | `8070` | Dashboard listen port (Docker) |
-| `VITE_API_URL` | Yes | - | Backend URL as seen by browser |
-| `CORS_ORIGIN` | No | `*` | Allowed CORS origin |
+| `DASHBOARD_PORT` | No | `8070` | Dashboard listen port |
+| `VITE_API_URL` | No | `http://localhost:3000` | Backend URL as seen by browser |
+| `CORS_ORIGIN` | No | `http://localhost:8070` | Allowed CORS origin |
 | `ADMIN_USERNAME` | No | `admin` | Initial admin username |
 | `ADMIN_PASSWORD` | No | *(generated)* | Initial admin password (min 12 chars) |
-| `REDACTION_ENABLED` | No | `false` | Enable secret redaction before storage |
+| `REDACTION_ENABLED` | No | `false` | Enable secret redaction |
 | `PIPELINE_INTERVAL_MS` | No | `300000` | AI pipeline run interval (ms) |
-| `TZ` | No | `UTC` | Timezone for logs |
+| `TZ` | No | `Europe/Chisinau` | Timezone for application logs |
+| `DB_EXTERNAL_PORT` | No | `127.0.0.1:5432` | Expose PostgreSQL to host |

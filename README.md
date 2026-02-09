@@ -98,24 +98,28 @@ Dashboard (React)  <-->  Alerting (Webhook, Pushover, NTfy, Gotify, Telegram)
 
 > **See [INSTALL.md](./INSTALL.md) for the complete step-by-step installation guide** covering Docker deployment, standalone installation, syslog forwarder setup, and log shipper integration.
 
-### Quick Start (Docker — recommended)
+### Quick Start (Docker — 5 minutes)
+
+Everything is included: PostgreSQL, backend, and dashboard. You only need Docker and an OpenAI API key.
 
 ```bash
 git clone https://github.com/PhilipLykov/SyslogCollectorAI.git
 cd SyslogCollectorAI/docker
 cp .env.example .env
-# Edit .env with your PostgreSQL credentials and OpenAI API key
-docker compose build
-docker compose up -d
+# Edit .env — set DB_PASSWORD (any strong password) and OPENAI_API_KEY
+docker compose up -d --build
 ```
 
-Open `http://your-server:8070` in your browser. Check the backend logs for your initial admin credentials:
+Check the backend logs for your admin credentials and open the dashboard:
 
 ```bash
-docker logs docker-backend-1 2>&1 | grep -A 5 "BOOTSTRAP"
+docker compose logs backend | grep -A 5 "BOOTSTRAP"
+# Open http://localhost:8070 in your browser
 ```
 
 Log in with the displayed username and password. You will be prompted to change the password on first login.
+
+> See **[INSTALL.md](./INSTALL.md)** for detailed setup, LAN/remote access, log shipper integration, syslog forwarder configuration, and troubleshooting.
 
 ---
 
