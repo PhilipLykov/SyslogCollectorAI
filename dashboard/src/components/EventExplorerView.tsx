@@ -10,6 +10,7 @@ import {
   unacknowledgeEvents,
 } from '../api';
 import { TracePanel } from './TracePanel';
+import { EuDateInput, euToIso, todayStartEu, todayEndEu, yearStartEu, nowEu } from './EuDateInput';
 
 interface Props {
   onAuthError: () => void;
@@ -36,23 +37,7 @@ function formatEuDate(iso: string): string {
   }
 }
 
-/** Get today's start (00:00) as datetime-local input value (YYYY-MM-DDTHH:MM). */
-function todayStart(): string {
-  const d = new Date();
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}T00:00`;
-}
-
-/** Get today's end (23:59) as datetime-local input value (YYYY-MM-DDTHH:MM). */
-function todayEnd(): string {
-  const d = new Date();
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}T23:59`;
-}
+// todayStart / todayEnd / yearStart / now helpers imported from EuDateInput
 
 // ── Keyword highlighting ──────────────────────────────────────
 
@@ -94,8 +79,8 @@ export function EventExplorerView({ onAuthError }: Props) {
   const [severityFilter, setSeverityFilter] = useState('');
   const [hostFilter, setHostFilter] = useState('');
   const [programFilter, setProgramFilter] = useState('');
-  const [fromDate, setFromDate] = useState(todayStart);
-  const [toDate, setToDate] = useState(todayEnd);
+  const [fromDate, setFromDate] = useState(todayStartEu);
+  const [toDate, setToDate] = useState(todayEndEu);
   const [sortBy, setSortBy] = useState('timestamp');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [page, setPage] = useState(1);
@@ -118,19 +103,8 @@ export function EventExplorerView({ onAuthError }: Props) {
   // ── Acknowledge panel ──────────────────────────────────
   const [showAckPanel, setShowAckPanel] = useState(false);
   const [ackSystem, setAckSystem] = useState('');
-  const [ackFrom, setAckFrom] = useState(() => {
-    const d = new Date();
-    return `${d.getFullYear()}-01-01T00:00`;
-  });
-  const [ackTo, setAckTo] = useState(() => {
-    const d = new Date();
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    const h = String(d.getHours()).padStart(2, '0');
-    const min = String(d.getMinutes()).padStart(2, '0');
-    return `${y}-${m}-${day}T${h}:${min}`;
-  });
+  const [ackFrom, setAckFrom] = useState(yearStartEu);
+  const [ackTo, setAckTo] = useState(nowEu);
   const [acking, setAcking] = useState(false);
   const [ackMsg, setAckMsg] = useState('');
   const [ackError, setAckError] = useState('');
@@ -176,8 +150,10 @@ export function EventExplorerView({ onAuthError }: Props) {
       if (severityFilter) params.severity = severityFilter;
       if (hostFilter) params.host = hostFilter;
       if (programFilter) params.program = programFilter;
-      if (fromDate) params.from = new Date(fromDate).toISOString();
-      if (toDate) params.to = new Date(toDate).toISOString();
+      const isoFrom = euToIso(fromDate);
+      const isoTo = euToIso(toDate);
+      if (isoFrom) params.from = isoFrom;
+      if (isoTo) params.to = isoTo;
 
       try {
         const data = await searchEvents(params);
@@ -293,13 +269,10 @@ export function EventExplorerView({ onAuthError }: Props) {
     return sortDir === 'desc' ? ' \u2193' : ' \u2191';
   };
 
-  /** Format datetime-local value (YYYY-MM-DDTHH:MM) into EU display. */
-  const fmtAckDate = (v: string) => v ? formatEuDate(new Date(v).toISOString()) : 'now';
-
   const handleAcknowledge = async () => {
     const rangeDesc = ackFrom
-      ? `from ${fmtAckDate(ackFrom)} to ${fmtAckDate(ackTo)}`
-      : `up to ${fmtAckDate(ackTo)}`;
+      ? `from ${ackFrom} to ${ackTo || 'now'}`
+      : `up to ${ackTo || 'now'}`;
     const systemDesc = ackSystem
       ? facets?.systems.find((s) => s.id === ackSystem)?.name ?? ackSystem
       : 'ALL systems';
@@ -314,8 +287,10 @@ export function EventExplorerView({ onAuthError }: Props) {
     try {
       const params: { system_id?: string; from?: string; to?: string } = {};
       if (ackSystem) params.system_id = ackSystem;
-      if (ackFrom) params.from = new Date(ackFrom).toISOString();
-      if (ackTo) params.to = new Date(ackTo).toISOString();
+      const ackFromIso = euToIso(ackFrom);
+      const ackToIso = euToIso(ackTo);
+      if (ackFromIso) params.from = ackFromIso;
+      if (ackToIso) params.to = ackToIso;
       const res = await acknowledgeEvents(params);
       setAckMsg(res.message);
       if (hasSearched) doSearch(page);
@@ -330,8 +305,8 @@ export function EventExplorerView({ onAuthError }: Props) {
 
   const handleUnacknowledge = async () => {
     const rangeDesc = ackFrom
-      ? `from ${fmtAckDate(ackFrom)} to ${fmtAckDate(ackTo)}`
-      : `up to ${fmtAckDate(ackTo)}`;
+      ? `from ${ackFrom} to ${ackTo || 'now'}`
+      : `up to ${ackTo || 'now'}`;
     const systemDesc = ackSystem
       ? facets?.systems.find((s) => s.id === ackSystem)?.name ?? ackSystem
       : 'ALL systems';
@@ -346,8 +321,10 @@ export function EventExplorerView({ onAuthError }: Props) {
     try {
       const params: { system_id?: string; from?: string; to?: string } = {};
       if (ackSystem) params.system_id = ackSystem;
-      if (ackFrom) params.from = new Date(ackFrom).toISOString();
-      if (ackTo) params.to = new Date(ackTo).toISOString();
+      const unAckFromIso = euToIso(ackFrom);
+      const unAckToIso = euToIso(ackTo);
+      if (unAckFromIso) params.from = unAckFromIso;
+      if (unAckToIso) params.to = unAckToIso;
       const res = await unacknowledgeEvents(params);
       setAckMsg(res.message);
       if (hasSearched) doSearch(page);
@@ -437,20 +414,11 @@ export function EventExplorerView({ onAuthError }: Props) {
             </div>
             <div className="ee-filter-group">
               <label>From</label>
-              <input
-                type="datetime-local"
-                value={ackFrom}
-                onChange={(e) => setAckFrom(e.target.value)}
-                placeholder="Beginning"
-              />
+              <EuDateInput value={ackFrom} onChange={setAckFrom} placeholder="DD-MM-YYYY HH:MM" />
             </div>
             <div className="ee-filter-group">
               <label>To (default: now)</label>
-              <input
-                type="datetime-local"
-                value={ackTo}
-                onChange={(e) => setAckTo(e.target.value)}
-              />
+              <EuDateInput value={ackTo} onChange={setAckTo} />
             </div>
             <div className="ee-ack-buttons">
               <button
@@ -515,19 +483,11 @@ export function EventExplorerView({ onAuthError }: Props) {
           </div>
           <div className="ee-filter-group">
             <label>From</label>
-            <input
-              type="datetime-local"
-              value={fromDate}
-              onChange={(e) => setFromDate(e.target.value)}
-            />
+            <EuDateInput value={fromDate} onChange={setFromDate} />
           </div>
           <div className="ee-filter-group">
             <label>To</label>
-            <input
-              type="datetime-local"
-              value={toDate}
-              onChange={(e) => setToDate(e.target.value)}
-            />
+            <EuDateInput value={toDate} onChange={setToDate} />
           </div>
         </div>
       )}

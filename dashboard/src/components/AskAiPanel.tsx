@@ -6,8 +6,9 @@ import {
   fetchRagHistory,
   clearRagHistory,
 } from '../api';
+import { EuDateInput, euToIso, isoToEu } from './EuDateInput';
 
-// ── EU date format helper ────────────────────────────────────
+// ── EU date format helper (with seconds, for display) ────────
 
 function formatEuDate(iso: string): string {
   try {
@@ -108,8 +109,10 @@ export function AskAiPanel({
 
       // Time range
       if (periodMode === 'custom') {
-        if (fromDate) params.from = new Date(fromDate).toISOString();
-        if (toDate) params.to = new Date(toDate).toISOString();
+        const isoFrom = euToIso(fromDate);
+        const isoTo = euToIso(toDate);
+        if (isoFrom) params.from = isoFrom;
+        if (isoTo) params.to = isoTo;
       }
 
       const res = await askAi(params);
@@ -236,19 +239,11 @@ export function AskAiPanel({
               <>
                 <div className="ask-ai-filter-group">
                   <label>From</label>
-                  <input
-                    type="datetime-local"
-                    value={fromDate}
-                    onChange={(e) => setFromDate(e.target.value)}
-                  />
+                  <EuDateInput value={fromDate} onChange={setFromDate} />
                 </div>
                 <div className="ask-ai-filter-group">
                   <label>To</label>
-                  <input
-                    type="datetime-local"
-                    value={toDate}
-                    onChange={(e) => setToDate(e.target.value)}
-                  />
+                  <EuDateInput value={toDate} onChange={setToDate} />
                 </div>
               </>
             )}
