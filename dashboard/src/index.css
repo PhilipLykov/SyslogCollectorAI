@@ -1684,8 +1684,12 @@ input:focus-visible,
   font-size: 0.8rem;
   color: var(--text-muted);
   background: var(--bg);
-  padding: 2px 8px;
+  padding: 4px 10px;
   border-radius: 4px;
+  word-break: break-all;
+  overflow-wrap: break-word;
+  flex-basis: 100%;
+  line-height: 1.6;
 }
 
 .ai-key-source {
