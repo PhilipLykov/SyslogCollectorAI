@@ -88,14 +88,20 @@ export interface LogSource {
 export interface LogEvent {
   id: string;
   system_id: string;
+  system_name?: string;
   log_source_id: string;
   timestamp: string;
+  received_at?: string;
   message: string;
   severity?: string;
   host?: string;
   service?: string;
   program?: string;
   facility?: string;
+  trace_id?: string;
+  span_id?: string;
+  external_id?: string;
+  raw?: Record<string, unknown> | string;
 }
 
 export interface MetaResult {
@@ -509,6 +515,100 @@ export async function fetchLlmUsage(opts?: {
   if (opts?.to) params.set('to', opts.to);
   if (opts?.system_id) params.set('system_id', opts.system_id);
   return apiFetch(`/api/v1/llm-usage?${params}`);
+}
+
+// ── Event Search / Explorer ──────────────────────────────────
+
+export interface SearchEventsParams {
+  q?: string;
+  q_mode?: 'fulltext' | 'contains';
+  system_id?: string;
+  severity?: string;        // comma-separated
+  host?: string;
+  program?: string;
+  service?: string;
+  trace_id?: string;
+  from?: string;
+  to?: string;
+  sort_by?: string;
+  sort_dir?: 'asc' | 'desc';
+  page?: number;
+  limit?: number;
+}
+
+export interface SearchEventsResponse {
+  events: LogEvent[];
+  total: number;
+  page: number;
+  limit: number;
+  has_more: boolean;
+}
+
+export async function searchEvents(params: SearchEventsParams): Promise<SearchEventsResponse> {
+  const qs = new URLSearchParams();
+  if (params.q) qs.set('q', params.q);
+  if (params.q_mode) qs.set('q_mode', params.q_mode);
+  if (params.system_id) qs.set('system_id', params.system_id);
+  if (params.severity) qs.set('severity', params.severity);
+  if (params.host) qs.set('host', params.host);
+  if (params.program) qs.set('program', params.program);
+  if (params.service) qs.set('service', params.service);
+  if (params.trace_id) qs.set('trace_id', params.trace_id);
+  if (params.from) qs.set('from', params.from);
+  if (params.to) qs.set('to', params.to);
+  if (params.sort_by) qs.set('sort_by', params.sort_by);
+  if (params.sort_dir) qs.set('sort_dir', params.sort_dir);
+  if (params.page) qs.set('page', String(params.page));
+  if (params.limit) qs.set('limit', String(params.limit));
+  return apiFetch(`/api/v1/events/search?${qs}`);
+}
+
+export interface EventFacets {
+  severities: string[];
+  hosts: string[];
+  programs: string[];
+  systems: Array<{ id: string; name: string }>;
+}
+
+export async function fetchEventFacets(opts?: {
+  system_id?: string;
+  days?: number;
+}): Promise<EventFacets> {
+  const qs = new URLSearchParams();
+  if (opts?.system_id) qs.set('system_id', opts.system_id);
+  if (opts?.days) qs.set('days', String(opts.days));
+  return apiFetch(`/api/v1/events/facets?${qs}`);
+}
+
+export interface TraceSystemGroup {
+  system_id: string;
+  system_name: string;
+  events: LogEvent[];
+}
+
+export interface TraceEventsResponse {
+  value: string;
+  field: string;
+  window: { from: string; to: string };
+  total: number;
+  systems: TraceSystemGroup[];
+  events: LogEvent[];
+}
+
+export async function traceEvents(params: {
+  value: string;
+  field?: 'trace_id' | 'message' | 'all';
+  anchor_time?: string;
+  window_hours?: number;
+  limit?: number;
+}): Promise<TraceEventsResponse> {
+  const qs = new URLSearchParams();
+  qs.set('value', params.value);
+  if (params.field) qs.set('field', params.field);
+  if (params.anchor_time) qs.set('anchor_time', params.anchor_time);
+  if (params.window_hours) qs.set('window_hours', String(params.window_hours));
+  if (params.limit) qs.set('limit', String(params.limit));
+  return apiFetch(`/api/v1/events/trace?${qs}`);
 }
 
 /**

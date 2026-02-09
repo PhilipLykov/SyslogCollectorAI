@@ -5,9 +5,10 @@ import { DrillDown } from './components/DrillDown';
 import { LoginForm } from './components/LoginForm';
 import { SettingsView } from './components/SettingsView';
 import { LlmUsageView } from './components/LlmUsageView';
+import { EventExplorerView } from './components/EventExplorerView';
 import './index.css';
 
-type View = 'dashboard' | 'settings' | 'ai-usage';
+type View = 'dashboard' | 'settings' | 'ai-usage' | 'events';
 
 export default function App() {
   const [authenticated, setAuthenticated] = useState(!!getStoredApiKey());
@@ -108,6 +109,11 @@ export default function App() {
     setSelectedSystem(null);
   };
 
+  const switchToEvents = () => {
+    setView('events');
+    setSelectedSystem(null);
+  };
+
   return (
     <div className="app">
       <header className="header">
@@ -123,6 +129,14 @@ export default function App() {
               aria-selected={view === 'dashboard'}
             >
               Dashboard
+            </button>
+            <button
+              className={`nav-tab${view === 'events' ? ' active' : ''}`}
+              onClick={switchToEvents}
+              role="tab"
+              aria-selected={view === 'events'}
+            >
+              Events
             </button>
             <button
               className={`nav-tab${view === 'ai-usage' ? ' active' : ''}`}
@@ -166,7 +180,9 @@ export default function App() {
 
       {error && <div className="error-msg" role="alert">{error}</div>}
 
-      {view === 'ai-usage' ? (
+      {view === 'events' ? (
+        <EventExplorerView onAuthError={handleLogout} />
+      ) : view === 'ai-usage' ? (
         <LlmUsageView onAuthError={handleLogout} />
       ) : view === 'settings' ? (
         <SettingsView onAuthError={handleLogout} />

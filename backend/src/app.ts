@@ -11,6 +11,7 @@ import { registerDashboardRoutes } from './modules/dashboard/routes.js';
 import { registerAlertingRoutes } from './modules/alerting/routes.js';
 import { registerConnectorRoutes } from './modules/connectors/routes.js';
 import { registerFeaturesRoutes } from './modules/features/routes.js';
+import { registerEventRoutes } from './modules/events/routes.js';
 import { localTimestamp } from './config/index.js';
 
 export async function buildApp(): Promise<FastifyInstance> {
@@ -64,6 +65,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await registerAlertingRoutes(app);
   await registerConnectorRoutes(app);
   await registerFeaturesRoutes(app);
+  await registerEventRoutes(app);
 
   return app;
 }
