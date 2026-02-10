@@ -158,7 +158,7 @@ All endpoints require authentication via `Authorization: Bearer <session_token>`
 | **Findings** | `GET /api/v1/systems/:id/findings` | AI findings with lifecycle |
 | **RAG** | `POST /api/v1/ask` | Natural language event queries |
 | **AI Config** | `GET/PUT /api/v1/ai-config`, `/ai-prompts` | Model and prompt configuration |
-| **Alerting** | GET/POST/PUT/DELETE `/api/v1/notification-channels`, `/notification-rules`, `/silences` | Notification management |
+| **Alerting** | `GET/POST/PUT/DELETE /api/v1/notification-channels`, `/notification-rules`, `/silences` | Notification management |
 | **Maintenance** | `GET/PUT /api/v1/maintenance-config`, `/backup/*` | DB maintenance and backup |
 | **Privacy** | `GET/PUT /api/v1/privacy-config` | PII masking configuration |
 
