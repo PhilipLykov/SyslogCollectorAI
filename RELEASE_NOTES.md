@@ -1,32 +1,52 @@
-# SyslogCollectorAI v0.7.1-beta — Bug Fixes & Hardening
+# SyslogCollectorAI v0.7.2-beta — Security Hardening & Consistency
 
-**Patch release with important data integrity fixes, UI improvements, and security hardening.**
+**Comprehensive security hardening, audit coverage, CSS/UI consistency, and Docker reliability improvements.**
 
-Upgrade from v0.7.0-beta is strongly recommended.
+Upgrade from v0.7.0 or v0.7.1 is strongly recommended.
 
 ---
 
-## What's New in v0.7.1
+## What's New in v0.7.2
 
-### Bug Fixes — Backend
+### Security Hardening
 
-- **Transactional Role Operations** — Role creation and permission updates are now wrapped in database transactions. Previously, a failure during permission insertion could leave a role with zero permissions.
-- **Invalid Role Rejection** — Creating a user with a non-existent role now returns HTTP 400 instead of silently defaulting to `monitoring_agent`. Consistent with the update endpoint behavior.
-- **Unknown Permission Rejection** — Assigning an invalid permission name to a role now returns HTTP 400 instead of silently dropping it.
-- **Administrator Protection** — Cannot strip all permissions from the `administrator` system role via the API.
-- **Cache TTL Fix** — The synchronous permission cache lookup now respects the 30-second TTL, preventing stale permissions from being served indefinitely.
-- **Timestamp Consistency** — Migration 020 (roles table) now uses timezone-aware timestamps (`timestamptz`) matching all other tables.
-- **Error Logging** — API key `last_used_at` update failures are now logged instead of silently swallowed.
-- **Duplicate Type Cleanup** — `UserRole` type is now defined in a single canonical location.
+- **ILIKE Wildcard Injection Fix** — User input in event search, trace search, and audit log actor filter is now escaped for `%` and `_` wildcards before ILIKE queries, preventing pattern injection (OWASP A03).
+- **Multi-Permission Auth** — `requireAuth()` now accepts an array of permissions (OR logic), enabling finer-grained access control on shared endpoints.
+- **Systems Audit Logging** — Create, update, and delete operations on monitored systems now produce immutable audit log entries. Previously the only CRUD module without audit coverage.
+- **Date Validation Order** — Event acknowledge/unacknowledge endpoints now validate date inputs *before* parsing, preventing uncaught exceptions on malformed dates.
 
-### Bug Fixes — Frontend
+### Bug Fixes — Backend (v0.7.1 + v0.7.2)
 
-- **Audit Log Export Dates** — The export function now correctly converts EU-format dates (`DD-MM-YYYY`) to ISO format before sending to the server. Previously, exports with date filters silently used unrecognized date strings.
-- **Role Editor Dirty State** — Toggling permissions in the "Create Role" modal no longer falsely marks the main edit form as changed.
-- **Role Editor Sync After Save** — The edit form now re-syncs from fresh server data after saving, ensuring any server-side normalization is reflected immediately.
-- **User Management Fallback Roles** — If the roles API is unavailable, the role dropdown now shows built-in defaults instead of appearing empty.
-- **NumericInput NaN Guard** — If a parent component passes `NaN`, the input displays `0` (or `min`) instead of literal "NaN" text.
-- **Enable/Disable Button Styling** — The user Enable/Disable toggle now uses distinct CSS classes for each state.
+- **Transactional Role Operations** — Role creation and permission updates wrapped in DB transactions.
+- **Invalid Role Rejection** — Creating a user with a non-existent role returns HTTP 400 instead of silently defaulting.
+- **Unknown Permission Rejection** — Invalid permission names return HTTP 400 instead of being silently dropped.
+- **Administrator Protection** — Cannot strip all permissions from the `administrator` role via API.
+- **Cache TTL Fix** — Synchronous permission cache respects the 30-second TTL.
+- **Roles Read Access** — GET `/api/v1/roles` now accepts either `users:manage` or `roles:manage` permission, so custom roles with only `roles:manage` can use the roles editor.
+- **Logging Consistency** — `localTimestamp()` added to all remaining log statements (redact.ts, API key errors).
+
+### Bug Fixes — Frontend (v0.7.1 + v0.7.2)
+
+- **Missing CSS Variables** — Added `--danger`, `--muted`, and `--surface` to `:root`. Inline styles referencing these now render correctly.
+- **Missing CSS Classes** — Added `btn-success-outline`, `btn-primary`, and `badge-ok`. Buttons and badges previously had no visual styling.
+- **CSS Selector Fix** — `.tok-opt-row input` selector updated to match `NumericInput` rendered type (`text` instead of `number`).
+- **Input Type Consistency** — Replaced all remaining `type="number"` inputs in SystemForm and SourceForm with `type="text" inputMode="numeric"` to prevent snapping.
+- **Audit Log Export Dates** — Export now converts EU dates to ISO format before sending to server.
+- **Role Editor** — Dirty state no longer polluted by Create modal; edit form re-syncs after save.
+- **User Management Fallback** — Role dropdown shows defaults when API is unavailable.
+- **NumericInput NaN Guard** — Displays `0`/`min` instead of literal "NaN" text.
+- **Date Format** — All dates across the entire dashboard consistently use `DD-MM-YYYY` format.
+- **Number Inputs** — All numeric inputs allow free clearing before typing a new value.
+
+### Docker & Infrastructure
+
+- **Health-Aware Startup** — Backend now waits for PostgreSQL health check when using `--profile db`. Dashboard waits for backend.
+- **Version Alignment** — Backend and dashboard `package.json` versions synchronized to `0.7.2`.
+
+### Documentation
+
+- **INSTALL.md** — OpenAI API key correctly marked as optional; troubleshooting section updated.
+- **RELEASE_NOTES.md** — Comprehensive changelog for all changes since v0.7.0.
 
 ---
 
@@ -34,7 +54,7 @@ Upgrade from v0.7.0-beta is strongly recommended.
 
 ### Option A — All-in-One (PostgreSQL included)
 
-Everything runs inside Docker — no external database needed. Best for quick evaluation or small deployments.
+Everything runs inside Docker — no external database needed.
 
 ```bash
 git clone https://github.com/PhilipLykov/SyslogCollectorAI.git
@@ -50,7 +70,7 @@ docker compose logs backend | grep -A 5 "BOOTSTRAP"
 
 ### Option B — External PostgreSQL (bring your own database)
 
-Backend and dashboard run in Docker; you point them at your existing PostgreSQL server. Best for production environments.
+Backend and dashboard run in Docker; you point them at your existing PostgreSQL server.
 
 ```bash
 git clone https://github.com/PhilipLykov/SyslogCollectorAI.git
@@ -67,7 +87,7 @@ docker compose logs backend | grep -A 5 "BOOTSTRAP"
 
 See [INSTALL.md](https://github.com/PhilipLykov/SyslogCollectorAI/blob/master/INSTALL.md) for the complete deployment guide.
 
-## Upgrading from v0.7.0-beta
+## Upgrading from v0.7.0 or v0.7.1
 
 ```bash
 cd SyslogCollectorAI
