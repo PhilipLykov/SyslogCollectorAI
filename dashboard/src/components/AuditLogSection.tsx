@@ -7,6 +7,7 @@ import {
   getAuditExportUrl,
   getStoredApiKey,
 } from '../api';
+import { EuDateInput, euToIso } from './EuDateInput';
 
 interface Props {
   onAuthError: () => void;
@@ -42,8 +43,8 @@ export function AuditLogSection({ onAuthError }: Props) {
         action: actionFilter || undefined,
         resource_type: resourceFilter || undefined,
         search: searchTerm || undefined,
-        from: fromDate || undefined,
-        to: toDate || undefined,
+        from: euToIso(fromDate) || undefined,
+        to: euToIso(toDate) || undefined,
       });
       setData(result);
     } catch (err: unknown) {
@@ -69,10 +70,15 @@ export function AuditLogSection({ onAuthError }: Props) {
   useEffect(() => { load(); }, [load]);
 
   const fmtDate = (d: string) => {
-    return new Date(d).toLocaleString('en-GB', {
-      day: '2-digit', month: '2-digit', year: 'numeric',
-      hour: '2-digit', minute: '2-digit', second: '2-digit',
-    });
+    const dt = new Date(d);
+    if (isNaN(dt.getTime())) return d;
+    const dd = String(dt.getDate()).padStart(2, '0');
+    const mm = String(dt.getMonth() + 1).padStart(2, '0');
+    const yyyy = dt.getFullYear();
+    const hh = String(dt.getHours()).padStart(2, '0');
+    const min = String(dt.getMinutes()).padStart(2, '0');
+    const ss = String(dt.getSeconds()).padStart(2, '0');
+    return `${dd}-${mm}-${yyyy} ${hh}:${min}:${ss}`;
   };
 
   const handleExport = (format: 'csv' | 'json') => {
@@ -148,11 +154,11 @@ export function AuditLogSection({ onAuthError }: Props) {
         </div>
         <div className="admin-filter-group">
           <label>From</label>
-          <input type="datetime-local" value={fromDate} onChange={(e) => { setFromDate(e.target.value); setPage(1); }} />
+          <EuDateInput value={fromDate} onChange={(v) => { setFromDate(v); setPage(1); }} />
         </div>
         <div className="admin-filter-group">
           <label>To</label>
-          <input type="datetime-local" value={toDate} onChange={(e) => { setToDate(e.target.value); setPage(1); }} />
+          <EuDateInput value={toDate} onChange={(v) => { setToDate(v); setPage(1); }} />
         </div>
         <div className="admin-filter-group admin-filter-action">
           <button className="btn btn-xs btn-outline" onClick={() => {
