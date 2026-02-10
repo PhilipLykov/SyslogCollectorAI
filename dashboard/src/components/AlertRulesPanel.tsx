@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
+import { NumericInput } from './NumericInput';
 import {
   type NotificationChannel,
   type NotificationRule,
@@ -527,13 +528,11 @@ function RuleFormModal({
 
             <div className="form-group">
               <label htmlFor="rule-throttle">Minimum interval between alerts (minutes)</label>
-              <input
-                id="rule-throttle"
-                type="number"
+              <NumericInput
                 min={0}
                 max={1440}
                 value={throttleMinutes}
-                onChange={(e) => setThrottleMinutes(Number(e.target.value))}
+                onChange={(v) => setThrottleMinutes(v)}
                 className="input-short"
               />
               <span className="form-hint">

@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
+import { NumericInput } from './NumericInput';
 import {
   type PrivacyFilterConfig,
   type PrivacyConfigResponse,
@@ -516,13 +517,11 @@ export function PrivacySection({ onAuthError }: PrivacySectionProps) {
             </div>
             <div className="form-group" style={{ marginTop: '12px' }}>
               <label htmlFor="rag-retention">RAG History Auto-Cleanup (days)</label>
-              <input
-                id="rag-retention"
-                type="number"
+              <NumericInput
                 min={0}
                 max={3650}
                 value={cfg.rag_history_retention_days}
-                onChange={(e) => setCfg({ ...cfg, rag_history_retention_days: Number(e.target.value) })}
+                onChange={(v) => setCfg({ ...cfg, rag_history_retention_days: v })}
                 style={{ width: '120px' }}
               />
               <span className="field-hint">

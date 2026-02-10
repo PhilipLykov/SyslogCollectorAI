@@ -308,9 +308,8 @@ export function DatabaseMaintenanceSection({ onAuthError }: DatabaseMaintenanceS
             <label htmlFor="maint-retention">Default Retention Period (days)</label>
             <input
               id="maint-retention"
-              type="number"
-              min={1}
-              max={3650}
+              type="text"
+              inputMode="numeric"
               value={retentionDays}
               onChange={(e) => setRetentionDays(e.target.value)}
             />
@@ -322,9 +321,8 @@ export function DatabaseMaintenanceSection({ onAuthError }: DatabaseMaintenanceS
             <label htmlFor="maint-interval">Maintenance Interval (hours)</label>
             <input
               id="maint-interval"
-              type="number"
-              min={1}
-              max={168}
+              type="text"
+              inputMode="numeric"
               value={intervalHours}
               onChange={(e) => setIntervalHours(e.target.value)}
             />
@@ -527,9 +525,8 @@ export function DatabaseMaintenanceSection({ onAuthError }: DatabaseMaintenanceS
                 <label htmlFor="backup-interval">Backup Interval (hours)</label>
                 <input
                   id="backup-interval"
-                  type="number"
-                  min={1}
-                  max={720}
+                  type="text"
+                  inputMode="numeric"
                   value={backupIntervalHours}
                   onChange={(e) => setBackupIntervalHours(e.target.value)}
                   style={{ width: '120px' }}
@@ -544,9 +541,8 @@ export function DatabaseMaintenanceSection({ onAuthError }: DatabaseMaintenanceS
                 <label htmlFor="backup-retention">Keep Last N Backups</label>
                 <input
                   id="backup-retention"
-                  type="number"
-                  min={1}
-                  max={100}
+                  type="text"
+                  inputMode="numeric"
                   value={backupRetentionCount}
                   onChange={(e) => setBackupRetentionCount(e.target.value)}
                   style={{ width: '120px' }}

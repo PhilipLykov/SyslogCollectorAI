@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
+import { NumericInput } from './NumericInput';
 import {
   type AiConfigResponse, fetchAiConfig, updateAiConfig,
   type AiPromptsResponse, fetchAiPrompts, updateAiPrompts,
@@ -878,11 +879,10 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
                 {tokCfg.score_cache_enabled && (
                   <div className="tok-opt-row">
                     <label>Cache TTL (minutes)</label>
-                    <input
-                      type="number"
+                    <NumericInput
                       min={1} max={10080} step={1}
                       value={tokCfg.score_cache_ttl_minutes}
-                      onChange={(e) => setTokCfg({ ...tokCfg, score_cache_ttl_minutes: Number(e.target.value) })}
+                      onChange={(v) => setTokCfg({ ...tokCfg, score_cache_ttl_minutes: v })}
                       style={{ width: 90 }}
                     />
                     <span className="form-hint">How long (min) to reuse cached scores before re-scoring.</span>
@@ -940,11 +940,10 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
                 </span>
                 <div className="tok-opt-row">
                   <label>Max message length (chars)</label>
-                  <input
-                    type="number"
+                  <NumericInput
                     min={50} max={10000} step={50}
                     value={tokCfg.message_max_length}
-                    onChange={(e) => setTokCfg({ ...tokCfg, message_max_length: Number(e.target.value) })}
+                    onChange={(v) => setTokCfg({ ...tokCfg, message_max_length: v })}
                     style={{ width: 90 }}
                   />
                 </div>
@@ -959,11 +958,10 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
                 </span>
                 <div className="tok-opt-row">
                   <label>Templates per batch</label>
-                  <input
-                    type="number"
+                  <NumericInput
                     min={1} max={100} step={1}
                     value={tokCfg.scoring_batch_size}
-                    onChange={(e) => setTokCfg({ ...tokCfg, scoring_batch_size: Number(e.target.value) })}
+                    onChange={(v) => setTokCfg({ ...tokCfg, scoring_batch_size: v })}
                     style={{ width: 90 }}
                   />
                 </div>
@@ -991,22 +989,20 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
                   <>
                     <div className="tok-opt-row">
                       <label>Score threshold</label>
-                      <input
-                        type="number"
+                      <NumericInput
                         min={0} max={1} step={0.01}
                         value={tokCfg.low_score_threshold}
-                        onChange={(e) => setTokCfg({ ...tokCfg, low_score_threshold: Number(e.target.value) })}
+                        onChange={(v) => setTokCfg({ ...tokCfg, low_score_threshold: v })}
                         style={{ width: 90 }}
                       />
                       <span className="form-hint">Templates with avg max score below this are auto-skipped.</span>
                     </div>
                     <div className="tok-opt-row">
                       <label>Min scorings before skip</label>
-                      <input
-                        type="number"
+                      <NumericInput
                         min={1} max={100} step={1}
                         value={tokCfg.low_score_min_scorings}
-                        onChange={(e) => setTokCfg({ ...tokCfg, low_score_min_scorings: Number(e.target.value) })}
+                        onChange={(v) => setTokCfg({ ...tokCfg, low_score_min_scorings: v })}
                         style={{ width: 90 }}
                       />
                       <span className="form-hint">Template must be scored at least this many times before auto-skip activates.</span>
@@ -1024,11 +1020,10 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
                 </span>
                 <div className="tok-opt-row">
                   <label>Max events per window</label>
-                  <input
-                    type="number"
+                  <NumericInput
                     min={10} max={2000} step={10}
                     value={tokCfg.meta_max_events}
-                    onChange={(e) => setTokCfg({ ...tokCfg, meta_max_events: Number(e.target.value) })}
+                    onChange={(v) => setTokCfg({ ...tokCfg, meta_max_events: v })}
                     style={{ width: 90 }}
                   />
                 </div>
@@ -1197,11 +1192,10 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
                 {metaCfg.finding_dedup_enabled && (
                   <div className="tok-opt-row">
                     <label>Similarity threshold</label>
-                    <input
-                      type="number"
+                    <NumericInput
                       min={0.1} max={1.0} step={0.05}
                       value={metaCfg.finding_dedup_threshold}
-                      onChange={(e) => setMetaCfg({ ...metaCfg, finding_dedup_threshold: Number(e.target.value) })}
+                      onChange={(v) => setMetaCfg({ ...metaCfg, finding_dedup_threshold: v })}
                       style={{ width: 90 }}
                     />
                     <span className="form-hint">
@@ -1211,11 +1205,10 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
                 )}
                 <div className="tok-opt-row">
                   <label>Max new findings per window</label>
-                  <input
-                    type="number"
+                  <NumericInput
                     min={1} max={50} step={1}
                     value={metaCfg.max_new_findings_per_window}
-                    onChange={(e) => setMetaCfg({ ...metaCfg, max_new_findings_per_window: Number(e.target.value) })}
+                    onChange={(v) => setMetaCfg({ ...metaCfg, max_new_findings_per_window: v })}
                     style={{ width: 90 }}
                   />
                   <span className="form-hint">
@@ -1233,11 +1226,10 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
                 </span>
                 <div className="tok-opt-row">
                   <label>Auto-resolve after (windows)</label>
-                  <input
-                    type="number"
+                  <NumericInput
                     min={0} max={100} step={1}
                     value={metaCfg.auto_resolve_after_misses}
-                    onChange={(e) => setMetaCfg({ ...metaCfg, auto_resolve_after_misses: Number(e.target.value) })}
+                    onChange={(v) => setMetaCfg({ ...metaCfg, auto_resolve_after_misses: v })}
                     style={{ width: 90 }}
                   />
                   <span className="form-hint">
@@ -1267,11 +1259,10 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
                 {metaCfg.severity_decay_enabled && (
                   <div className="tok-opt-row">
                     <label>Decay after (occurrences)</label>
-                    <input
-                      type="number"
+                    <NumericInput
                       min={1} max={100} step={1}
                       value={metaCfg.severity_decay_after_occurrences}
-                      onChange={(e) => setMetaCfg({ ...metaCfg, severity_decay_after_occurrences: Number(e.target.value) })}
+                      onChange={(v) => setMetaCfg({ ...metaCfg, severity_decay_after_occurrences: v })}
                       style={{ width: 90 }}
                     />
                     <span className="form-hint">
@@ -1290,11 +1281,10 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
                 </span>
                 <div className="tok-opt-row">
                   <label>Max open findings per system</label>
-                  <input
-                    type="number"
+                  <NumericInput
                     min={5} max={200} step={1}
                     value={metaCfg.max_open_findings_per_system}
-                    onChange={(e) => setMetaCfg({ ...metaCfg, max_open_findings_per_system: Number(e.target.value) })}
+                    onChange={(v) => setMetaCfg({ ...metaCfg, max_open_findings_per_system: v })}
                     style={{ width: 90 }}
                   />
                 </div>
