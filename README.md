@@ -100,35 +100,40 @@ Dashboard (React)  <-->  Alerting (Webhook, Pushover, NTfy, Gotify, Telegram)
 
 ### Quick Start (Docker — 5 minutes)
 
-You only need Docker and an OpenAI API key.
+You only need Docker. AI model and API key are configured via the web UI after first login.
+
+#### Option A — All-in-One (PostgreSQL included)
+
+Everything runs inside Docker — no external database needed.
 
 ```bash
 git clone https://github.com/PhilipLykov/SyslogCollectorAI.git
 cd SyslogCollectorAI/docker
 cp .env.example .env
-# Edit .env — set DB_HOST and DB_PASSWORD
-```
-
-**Option A** — You already have PostgreSQL:
-```bash
-# Set DB_HOST=your-pg-server-ip in .env
-docker compose up -d --build
-```
-
-**Option B** — All-in-one (bundled PostgreSQL):
-```bash
-# Set DB_HOST=postgres in .env
+# Edit .env: set DB_PASSWORD (pick any strong password) and DB_HOST=postgres
 docker compose --profile db up -d --build
 ```
 
-Check the backend logs for your admin credentials and open the dashboard:
+#### Option B — External PostgreSQL (bring your own database)
+
+Use your existing PostgreSQL server. Only the backend and dashboard run in Docker.
+
+```bash
+git clone https://github.com/PhilipLykov/SyslogCollectorAI.git
+cd SyslogCollectorAI/docker
+cp .env.example .env
+# Edit .env: set DB_HOST=<your-pg-server-ip> and DB_PASSWORD
+docker compose up -d --build
+```
+
+#### First Login
 
 ```bash
 docker compose logs backend | grep -A 5 "BOOTSTRAP"
 # Open http://localhost:8070 in your browser
 ```
 
-Log in with the displayed username and password. You will be prompted to change the password on first login.
+Log in with the displayed username and password. You will be prompted to change the password on first login. Then go to **Settings > AI Model** to configure your LLM API key.
 
 > See **[INSTALL.md](./INSTALL.md)** for detailed setup, LAN/remote access, log shipper integration, syslog forwarder configuration, and troubleshooting.
 

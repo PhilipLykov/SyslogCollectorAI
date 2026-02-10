@@ -31,7 +31,7 @@ SyslogCollectorAI transforms raw syslog streams into actionable security and ope
 - **Fully GUI-Configurable** — All settings adjustable via web UI: AI model, prompts, notifications, DB maintenance, privacy, users, API keys
 
 ### Scalability & Enterprise
-- **Self-Contained Docker Compose** — PostgreSQL + Backend + Dashboard in one command
+- **Flexible Docker Compose** — Two deployment modes: all-in-one (with bundled PostgreSQL) or bring-your-own-database
 - **Time-Based Table Partitioning** — Monthly auto-partitioned events table for fast queries and instant cleanup
 - **Per-System Data Retention** — Different retention policies per system
 - **Automated Database Backup** — Scheduled pg_dump with configurable format, retention, and UI download
@@ -41,24 +41,40 @@ SyslogCollectorAI transforms raw syslog streams into actionable security and ope
 
 ---
 
-## Quick Start
+## Deployment Options
+
+### Option A — All-in-One (PostgreSQL included)
+
+Everything runs inside Docker — no external database needed. Best for quick evaluation or small deployments.
 
 ```bash
 git clone https://github.com/PhilipLykov/SyslogCollectorAI.git
 cd SyslogCollectorAI/docker
 cp .env.example .env
-# Edit .env: set DB_HOST and DB_PASSWORD (AI key is set via UI)
+# Edit .env: set DB_PASSWORD (pick any strong password)
+# Set DB_HOST=postgres
 
-# With your own PostgreSQL:
-docker compose up -d --build
-
-# Or all-in-one (bundled PostgreSQL):
-# Set DB_HOST=postgres in .env, then:
 docker compose --profile db up -d --build
-
 docker compose logs backend | grep -A 5 "BOOTSTRAP"
 # Open http://localhost:8070
 ```
+
+### Option B — External PostgreSQL (bring your own database)
+
+Backend and dashboard run in Docker; you point them at your existing PostgreSQL server. Best for production environments.
+
+```bash
+git clone https://github.com/PhilipLykov/SyslogCollectorAI.git
+cd SyslogCollectorAI/docker
+cp .env.example .env
+# Edit .env: set DB_HOST=<your-pg-server> and DB_PASSWORD
+
+docker compose up -d --build
+docker compose logs backend | grep -A 5 "BOOTSTRAP"
+# Open http://localhost:8070
+```
+
+> AI model and API key are configured after login via **Settings > AI Model** in the web UI.
 
 See [INSTALL.md](https://github.com/PhilipLykov/SyslogCollectorAI/blob/master/INSTALL.md) for the complete deployment guide.
 
