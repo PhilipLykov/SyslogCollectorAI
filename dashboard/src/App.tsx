@@ -160,7 +160,8 @@ export default function App() {
       <header className="header">
         <div className="header-left">
           <h1>
-            <span>Syslog</span>CollectorAI
+            <span>Log</span>Sentinel AI
+            <span className="version-tag">v0.7.2</span>
           </h1>
           <nav className="header-nav" role="tablist" aria-label="Main navigation">
             <button

@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, Fragment } from 'react';
 import {
   type DashboardSystem,
   type LogEvent,
@@ -34,6 +34,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
 
   // Criterion drill-down state
@@ -114,6 +115,50 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
 
   const toggleRow = (id: string) => {
     setExpandedRow((prev) => (prev === id ? null : id));
+  };
+
+  /** Build plain-text representation of an event for clipboard. */
+  const eventToText = (e: LogEvent): string => {
+    const lines: string[] = [
+      `Event ID:    ${e.id}`,
+      `Timestamp:   ${safeDate(e.timestamp)}`,
+      `System:      ${system.name}`,
+      `Severity:    ${e.severity ?? '—'}`,
+      `Host:        ${e.host ?? '—'}`,
+      `Source IP:   ${e.source_ip ?? '—'}`,
+      `Program:     ${e.program ?? '—'}`,
+      `Service:     ${e.service ?? '—'}`,
+      `Facility:    ${e.facility ?? '—'}`,
+    ];
+    if (e.received_at) lines.push(`Received:    ${safeDate(e.received_at)}`);
+    if (e.trace_id) lines.push(`Trace ID:    ${e.trace_id}`);
+    if (e.span_id) lines.push(`Span ID:     ${e.span_id}`);
+    if (e.external_id) lines.push(`External ID: ${e.external_id}`);
+    if (e.acknowledged_at) lines.push(`Acknowledged: ${safeDate(e.acknowledged_at)}`);
+    lines.push('', '--- Message ---', e.message);
+    if (e.raw) {
+      lines.push('', '--- Raw Data ---', typeof e.raw === 'string' ? e.raw : JSON.stringify(e.raw, null, 2));
+    }
+    return lines.join('\n');
+  };
+
+  const handleCopyEvent = async (e: LogEvent) => {
+    try {
+      await navigator.clipboard.writeText(eventToText(e));
+      setCopiedId(e.id);
+      setTimeout(() => setCopiedId((prev) => (prev === e.id ? null : prev)), 2000);
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = eventToText(e);
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      setCopiedId(e.id);
+      setTimeout(() => setCopiedId((prev) => (prev === e.id ? null : prev)), 2000);
+    }
   };
 
   // ── Criterion click handler ─────────────────────────────
@@ -607,37 +652,92 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
             </thead>
             <tbody>
               {events.map((e) => (
-                <tr
-                  key={e.id}
-                  className={`event-row ${expandedRow === e.id ? 'expanded' : ''}`}
-                  onClick={() => toggleRow(e.id)}
-                  tabIndex={0}
-                  onKeyDown={(ev) => {
-                    if (ev.key === 'Enter' || ev.key === ' ') {
-                      ev.preventDefault();
-                      toggleRow(e.id);
-                    }
-                  }}
-                  aria-expanded={expandedRow === e.id}
-                  role="row"
-                >
-                  <td style={{ whiteSpace: 'nowrap' }}>
-                    {safeDate(e.timestamp)}
-                  </td>
-                  <td>
-                    {e.severity && (
-                      <span className={`severity-badge ${e.severity.toLowerCase()}`}>
-                        {e.severity}
-                      </span>
-                    )}
-                  </td>
-                  <td>{e.host ?? '—'}</td>
-                  <td>{e.source_ip ?? '—'}</td>
-                  <td>{e.program ?? '—'}</td>
-                  <td className={expandedRow === e.id ? 'message-expanded' : 'message-truncated'}>
-                    {e.message}
-                  </td>
-                </tr>
+                <Fragment key={e.id}>
+                  <tr
+                    className={`event-row ${expandedRow === e.id ? 'expanded' : ''}`}
+                    onClick={() => toggleRow(e.id)}
+                    tabIndex={0}
+                    onKeyDown={(ev) => {
+                      if (ev.key === 'Enter' || ev.key === ' ') {
+                        ev.preventDefault();
+                        toggleRow(e.id);
+                      }
+                    }}
+                    aria-expanded={expandedRow === e.id}
+                    role="row"
+                  >
+                    <td style={{ whiteSpace: 'nowrap' }}>
+                      {safeDate(e.timestamp)}
+                    </td>
+                    <td>
+                      {e.severity && (
+                        <span className={`severity-badge ${e.severity.toLowerCase()}`}>
+                          {e.severity}
+                        </span>
+                      )}
+                    </td>
+                    <td>{e.host ?? '—'}</td>
+                    <td>{e.source_ip ?? '—'}</td>
+                    <td>{e.program ?? '—'}</td>
+                    <td className={expandedRow === e.id ? 'message-expanded' : 'message-truncated'}>
+                      {e.message}
+                    </td>
+                  </tr>
+                  {expandedRow === e.id && (
+                    <tr className="ee-detail-row">
+                      <td colSpan={6}>
+                        <div className="ee-detail-content">
+                          <div className="ee-detail-grid">
+                            <div className="ee-detail-field ee-detail-field-wide">
+                              <strong>Event ID:</strong> <code className="ee-id-code">{e.id}</code>
+                            </div>
+                            <div className="ee-detail-field">
+                              <strong>Source IP:</strong> {e.source_ip ?? '—'}
+                            </div>
+                            <div className="ee-detail-field">
+                              <strong>Received:</strong> {e.received_at ? safeDate(e.received_at) : '—'}
+                            </div>
+                            <div className="ee-detail-field">
+                              <strong>Service:</strong> {e.service ?? '—'}
+                            </div>
+                            <div className="ee-detail-field">
+                              <strong>Facility:</strong> {e.facility ?? '—'}
+                            </div>
+                            {e.trace_id && (
+                              <div className="ee-detail-field">
+                                <strong>Trace ID:</strong> <code>{e.trace_id}</code>
+                              </div>
+                            )}
+                            {e.span_id && (
+                              <div className="ee-detail-field">
+                                <strong>Span ID:</strong> <code>{e.span_id}</code>
+                              </div>
+                            )}
+                          </div>
+                          <div className="ee-detail-message">
+                            <strong>Full message:</strong>
+                            <pre>{e.message}</pre>
+                          </div>
+                          {e.raw && (
+                            <div className="ee-detail-raw">
+                              <strong>Raw data:</strong>
+                              <pre>{typeof e.raw === 'string' ? e.raw : JSON.stringify(e.raw, null, 2)}</pre>
+                            </div>
+                          )}
+                          <div className="ee-detail-actions">
+                            <button
+                              className={`btn btn-sm ${copiedId === e.id ? 'btn-success-outline' : 'btn-outline'}`}
+                              onClick={(ev) => { ev.stopPropagation(); handleCopyEvent(e); }}
+                              title="Copy full event details to clipboard"
+                            >
+                              {copiedId === e.id ? 'Copied!' : 'Copy Event'}
+                            </button>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
               ))}
             </tbody>
           </table>

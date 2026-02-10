@@ -90,8 +90,22 @@ input:focus-visible,
   color: var(--text);
 }
 
-.header h1 span {
+.header h1 span:not(.version-tag) {
   color: var(--accent);
+}
+
+.version-tag {
+  display: inline-block;
+  font-size: 0.55rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  margin-left: 8px;
+  vertical-align: middle;
+  letter-spacing: 0.02em;
 }
 
 .header-actions {

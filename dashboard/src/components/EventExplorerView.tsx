@@ -68,6 +68,31 @@ function highlightText(text: string, term: string): React.ReactNode[] {
   return parts;
 }
 
+/** Build a plain-text representation of an event for clipboard. */
+function eventToClipboardText(e: LogEvent): string {
+  const lines: string[] = [
+    `Event ID:    ${e.id}`,
+    `Timestamp:   ${formatEuDate(e.timestamp)}`,
+    `System:      ${e.system_name ?? e.system_id}`,
+    `Severity:    ${e.severity ?? '—'}`,
+    `Host:        ${e.host ?? '—'}`,
+    `Source IP:   ${e.source_ip ?? '—'}`,
+    `Program:     ${e.program ?? '—'}`,
+    `Service:     ${e.service ?? '—'}`,
+    `Facility:    ${e.facility ?? '—'}`,
+  ];
+  if (e.received_at) lines.push(`Received:    ${formatEuDate(e.received_at)}`);
+  if (e.trace_id) lines.push(`Trace ID:    ${e.trace_id}`);
+  if (e.span_id) lines.push(`Span ID:     ${e.span_id}`);
+  if (e.external_id) lines.push(`External ID: ${e.external_id}`);
+  if (e.acknowledged_at) lines.push(`Acknowledged: ${formatEuDate(e.acknowledged_at)}`);
+  lines.push('', '--- Message ---', e.message);
+  if (e.raw) {
+    lines.push('', '--- Raw Data ---', typeof e.raw === 'string' ? e.raw : JSON.stringify(e.raw, null, 2));
+  }
+  return lines.join('\n');
+}
+
 export function EventExplorerView({ onAuthError }: Props) {
   // ── Facets (for filter dropdowns) ────────────────────────
   const [facets, setFacets] = useState<EventFacets | null>(null);
@@ -100,6 +125,28 @@ export function EventExplorerView({ onAuthError }: Props) {
   // ── Trace panel ──────────────────────────────────────────
   const [traceValue, setTraceValue] = useState<string | null>(null);
   const [traceAnchorTime, setTraceAnchorTime] = useState<string | undefined>(undefined);
+
+  // ── Copy to clipboard ───────────────────────────────────
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const handleCopyEvent = async (e: LogEvent) => {
+    try {
+      await navigator.clipboard.writeText(eventToClipboardText(e));
+      setCopiedId(e.id);
+      setTimeout(() => setCopiedId((prev) => (prev === e.id ? null : prev)), 2000);
+    } catch {
+      // Fallback for insecure contexts
+      const ta = document.createElement('textarea');
+      ta.value = eventToClipboardText(e);
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      setCopiedId(e.id);
+      setTimeout(() => setCopiedId((prev) => (prev === e.id ? null : prev)), 2000);
+    }
+  };
 
   // ── Acknowledge panel ──────────────────────────────────
   const [showAckPanel, setShowAckPanel] = useState(false);
@@ -699,6 +746,13 @@ export function EventExplorerView({ onAuthError }: Props) {
                           )}
 
                           <div className="ee-detail-actions">
+                            <button
+                              className={`btn btn-sm ${copiedId === e.id ? 'btn-success-outline' : 'btn-outline'}`}
+                              onClick={(ev) => { ev.stopPropagation(); handleCopyEvent(e); }}
+                              title="Copy full event details to clipboard"
+                            >
+                              {copiedId === e.id ? 'Copied!' : 'Copy Event'}
+                            </button>
                             {e.trace_id ? (
                               <button
                                 className="btn btn-sm btn-accent"
