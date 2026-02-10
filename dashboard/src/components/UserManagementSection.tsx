@@ -19,7 +19,12 @@ interface Props {
 
 export function UserManagementSection({ onAuthError, currentUser }: Props) {
   const [users, setUsers] = useState<UserInfo[]>([]);
-  const [roles, setRoles] = useState<RoleInfo[]>([]);
+  const FALLBACK_ROLES: RoleInfo[] = [
+    { name: 'administrator', display_name: 'Administrator', description: 'Full access', is_system: true, permissions: [] },
+    { name: 'auditor', display_name: 'Auditor', description: 'Read-only auditor', is_system: true, permissions: [] },
+    { name: 'monitoring_agent', display_name: 'Monitoring Agent', description: 'Default monitoring role', is_system: true, permissions: [] },
+  ];
+  const [roles, setRoles] = useState<RoleInfo[]>(FALLBACK_ROLES);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -304,7 +309,7 @@ export function UserManagementSection({ onAuthError, currentUser }: Props) {
                           <button className="btn btn-xs btn-outline" onClick={() => { setResetId(u.id); setResetPw(''); }}>Reset PW</button>
                           {!isSelf(u) && (
                             <button
-                              className={`btn btn-xs ${u.is_active ? 'btn-outline' : 'btn-outline'}`}
+                              className={`btn btn-xs ${u.is_active ? 'btn-outline' : 'btn-success-outline'}`}
                               onClick={() => handleToggleActive(u)}
                             >
                               {u.is_active ? 'Disable' : 'Enable'}

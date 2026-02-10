@@ -103,9 +103,8 @@ export const ALL_PERMISSIONS: ReadonlyArray<{
   { permission: 'ingest',               label: 'Ingest Events (API key only)',  category: 'Ingest' },
 ];
 
-// ── User roles (kept for backward compat type, but DB is the source of truth)
-
-export type UserRole = string; // Now dynamic — any role name from the DB
+// Re-export UserRole from the canonical location
+export type { UserRole } from '../types/index.js';
 
 // ── Hardcoded fallback (used if DB is not yet migrated) ──────
 
@@ -191,7 +190,7 @@ export async function getPermissionsForRole(role: string): Promise<ReadonlySet<P
  */
 export function getPermissionsForRoleSync(role: string): ReadonlySet<Permission> {
   const cached = roleCache.get(role);
-  if (cached) return cached.permissions;
+  if (cached && Date.now() - cached.ts < CACHE_TTL_MS) return cached.permissions;
   return FALLBACK_ROLE_PERMISSIONS[role] ?? new Set();
 }
 

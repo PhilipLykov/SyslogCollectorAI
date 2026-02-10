@@ -13,8 +13,8 @@ export async function up(knex: Knex): Promise<void> {
     t.string('display_name', 128).notNullable();     // e.g. 'Administrator'
     t.text('description').defaultTo('');
     t.boolean('is_system').defaultTo(false);          // system roles can't be deleted
-    t.timestamp('created_at').defaultTo(knex.fn.now());
-    t.timestamp('updated_at').defaultTo(knex.fn.now());
+    t.timestamp('created_at', { useTz: true }).defaultTo(knex.fn.now());
+    t.timestamp('updated_at', { useTz: true }).defaultTo(knex.fn.now());
   });
 
   // ── role_permissions table ──────────────────────────────────

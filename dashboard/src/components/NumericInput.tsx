@@ -12,7 +12,7 @@ interface NumericInputProps {
   onChange: (v: number) => void;
   min?: number;
   max?: number;
-  step?: number | string;
+  step?: number | string; // reserved for future use
   className?: string;
   style?: React.CSSProperties;
   disabled?: boolean;
@@ -28,15 +28,16 @@ export function NumericInput({
   style,
   disabled,
 }: NumericInputProps) {
-  const [raw, setRaw] = useState(String(value));
+  const safeStr = (v: number) => String(isNaN(v) ? (min ?? 0) : v);
+  const [raw, setRaw] = useState(safeStr(value));
   const focused = useRef(false);
 
   // Sync from parent when not focused
   useEffect(() => {
     if (!focused.current) {
-      setRaw(String(value));
+      setRaw(safeStr(value));
     }
-  }, [value]);
+  }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const commit = () => {
     let n = parseFloat(raw);

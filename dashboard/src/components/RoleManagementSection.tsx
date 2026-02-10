@@ -81,15 +81,15 @@ export function RoleManagementSection({ onAuthError }: Props) {
   };
 
   // Toggle a permission in the edit set
-  const togglePerm = (perm: string, set: Set<string>, setter: (s: Set<string>) => void) => {
+  const togglePerm = (perm: string, set: Set<string>, setter: (s: Set<string>) => void, markDirty = false) => {
     const next = new Set(set);
     if (next.has(perm)) next.delete(perm); else next.add(perm);
     setter(next);
-    setDirty(true);
+    if (markDirty) setDirty(true);
   };
 
   // Toggle an entire category
-  const toggleCategory = (category: string, set: Set<string>, setter: (s: Set<string>) => void) => {
+  const toggleCategory = (category: string, set: Set<string>, setter: (s: Set<string>) => void, markDirty = false) => {
     const catPerms = permsByCategory[category] ?? [];
     const allChecked = catPerms.every((p) => set.has(p.permission));
     const next = new Set(set);
@@ -97,7 +97,7 @@ export function RoleManagementSection({ onAuthError }: Props) {
       if (allChecked) next.delete(p.permission); else next.add(p.permission);
     });
     setter(next);
-    setDirty(true);
+    if (markDirty) setDirty(true);
   };
 
   // Save edited role
@@ -114,6 +114,14 @@ export function RoleManagementSection({ onAuthError }: Props) {
       setSuccess('Role updated successfully.');
       setDirty(false);
       await load();
+      // Re-sync edit form from fresh data
+      const freshRoles = await fetchRoles();
+      const freshRole = freshRoles.find((r) => r.name === selectedRole);
+      if (freshRole) {
+        setEditPerms(new Set(freshRole.permissions));
+        setEditDisplayName(freshRole.display_name);
+        setEditDescription(freshRole.description);
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('Authentication')) onAuthError();
@@ -173,7 +181,7 @@ export function RoleManagementSection({ onAuthError }: Props) {
   const currentRole = roles.find((r) => r.name === selectedRole);
 
   // Permission grid renderer
-  const renderPermGrid = (perms: Set<string>, setter: (s: Set<string>) => void, disabled?: boolean) => (
+  const renderPermGrid = (perms: Set<string>, setter: (s: Set<string>) => void, disabled?: boolean, markDirty = false) => (
     <div className="role-perm-grid">
       {sortedCategories.map((cat) => {
         const catPerms = permsByCategory[cat] ?? [];
@@ -189,7 +197,7 @@ export function RoleManagementSection({ onAuthError }: Props) {
                   type="checkbox"
                   checked={allChecked}
                   ref={(el) => { if (el) el.indeterminate = someChecked; }}
-                  onChange={() => toggleCategory(cat, perms, setter)}
+                  onChange={() => toggleCategory(cat, perms, setter, markDirty)}
                   disabled={disabled}
                 />
                 <span className="role-perm-cat-label">{cat}</span>
@@ -202,7 +210,7 @@ export function RoleManagementSection({ onAuthError }: Props) {
                   <input
                     type="checkbox"
                     checked={perms.has(p.permission)}
-                    onChange={() => togglePerm(p.permission, perms, setter)}
+                    onChange={() => togglePerm(p.permission, perms, setter, markDirty)}
                     disabled={disabled}
                   />
                   <span className="role-perm-label">{p.label}</span>
@@ -298,7 +306,7 @@ export function RoleManagementSection({ onAuthError }: Props) {
               </div>
 
               <h4 className="role-perm-heading">Permissions</h4>
-              {renderPermGrid(editPerms, setEditPerms)}
+              {renderPermGrid(editPerms, setEditPerms, false, true)}
 
               <div className="role-editor-actions">
                 <button

@@ -91,22 +91,29 @@ export async function registerRoleRoutes(app: FastifyInstance): Promise<void> {
 
       // Validate permissions
       const validPermNames: string[] = ALL_PERMISSIONS.map((p) => p.permission as string);
-      const rolePerms: string[] = Array.isArray(permissions)
-        ? permissions.filter((p: string) => validPermNames.includes(p))
-        : [];
-
-      await db('roles').insert({
-        name: roleName,
-        display_name: display_name.trim(),
-        description: (description ?? '').trim(),
-        is_system: false,
-      });
-
-      if (rolePerms.length > 0) {
-        await db('role_permissions').insert(
-          rolePerms.map((p: string) => ({ role_name: roleName, permission: p })),
-        );
+      const rolePerms: string[] = [];
+      if (Array.isArray(permissions)) {
+        const invalid = permissions.filter((p: string) => !validPermNames.includes(p));
+        if (invalid.length > 0) {
+          return reply.code(400).send({ error: `Unknown permissions: ${invalid.join(', ')}` });
+        }
+        rolePerms.push(...permissions);
       }
+
+      await db.transaction(async (trx) => {
+        await trx('roles').insert({
+          name: roleName,
+          display_name: display_name.trim(),
+          description: (description ?? '').trim(),
+          is_system: false,
+        });
+
+        if (rolePerms.length > 0) {
+          await trx('role_permissions').insert(
+            rolePerms.map((p: string) => ({ role_name: roleName, permission: p })),
+          );
+        }
+      });
 
       invalidateRoleCache(roleName);
 
@@ -161,21 +168,35 @@ export async function registerRoleRoutes(app: FastifyInstance): Promise<void> {
         updates.description = (description ?? '').trim();
       }
 
-      await db('roles').where({ name: roleName }).update(updates);
-
-      // Update permissions if provided
+      // Validate permissions before transaction
+      let rolePerms: string[] | null = null;
       if (Array.isArray(permissions)) {
         const validPermNames: string[] = ALL_PERMISSIONS.map((p) => p.permission as string);
-        const rolePerms: string[] = permissions.filter((p: string) => validPermNames.includes(p));
+        const invalid = permissions.filter((p: string) => !validPermNames.includes(p));
+        if (invalid.length > 0) {
+          return reply.code(400).send({ error: `Unknown permissions: ${invalid.join(', ')}` });
+        }
+        rolePerms = permissions;
 
-        // Replace all permissions for this role
-        await db('role_permissions').where({ role_name: roleName }).del();
-        if (rolePerms.length > 0) {
-          await db('role_permissions').insert(
-            rolePerms.map((p) => ({ role_name: roleName, permission: p })),
-          );
+        // Prevent stripping all permissions from administrator role
+        if (role.is_system && roleName === 'administrator' && rolePerms.length === 0) {
+          return reply.code(400).send({ error: 'Cannot remove all permissions from the administrator role.' });
         }
       }
+
+      await db.transaction(async (trx) => {
+        await trx('roles').where({ name: roleName }).update(updates);
+
+        // Update permissions if provided
+        if (rolePerms !== null) {
+          await trx('role_permissions').where({ role_name: roleName }).del();
+          if (rolePerms.length > 0) {
+            await trx('role_permissions').insert(
+              rolePerms.map((p) => ({ role_name: roleName, permission: p })),
+            );
+          }
+        }
+      });
 
       invalidateRoleCache(roleName);
 

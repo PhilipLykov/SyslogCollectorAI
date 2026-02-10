@@ -96,6 +96,9 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
 
       // Validate role
       const validRoles = await getValidRoles();
+      if (role && !validRoles.includes(role)) {
+        return reply.code(400).send({ error: `Invalid role. Valid roles: ${validRoles.join(', ')}` });
+      }
       const userRole = role && validRoles.includes(role) ? role : 'monitoring_agent';
 
       // Validate password policy

@@ -84,8 +84,8 @@ export function AuditLogSection({ onAuthError }: Props) {
   const handleExport = (format: 'csv' | 'json') => {
     const url = getAuditExportUrl({
       format,
-      from: fromDate || undefined,
-      to: toDate || undefined,
+      from: euToIso(fromDate) || undefined,
+      to: euToIso(toDate) || undefined,
     });
     const token = getStoredApiKey();
     fetch(url, { headers: { 'Authorization': `Bearer ${token}` } })

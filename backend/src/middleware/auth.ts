@@ -147,7 +147,7 @@ export function requireAuth(permission: Permission) {
     db('api_keys')
       .where({ id: keyRow.id })
       .update({ last_used_at: new Date() })
-      .catch(() => {});
+      .catch((err) => { console.error(`[${localTimestamp()}] Failed to update api_key last_used_at:`, err.message); });
 
     request.currentUser = null;
     request.currentSession = null;
