@@ -44,7 +44,8 @@ function hashToken(token: string): string {
  *
  * OWASP: A01 (access control), A07 (auth failures — generic error).
  */
-export function requireAuth(permission: Permission) {
+export function requireAuth(permission: Permission | Permission[]) {
+  const perms = Array.isArray(permission) ? permission : [permission];
   return async function authHook(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     const db = getDb();
 
@@ -68,9 +69,9 @@ export function requireAuth(permission: Permission) {
           if (user) {
             const userPerms = await getPermissionsForRole(user.role);
 
-            if (!hasPermission(userPerms, permission)) {
+            if (!perms.some((p) => hasPermission(userPerms, p))) {
               console.log(
-                `[${localTimestamp()}] AUTH_FAIL: user "${user.username}" lacks permission "${permission}"`,
+                `[${localTimestamp()}] AUTH_FAIL: user "${user.username}" lacks permission "${perms.join(' | ')}"`,
               );
               return reply.code(403).send({ error: 'Insufficient permissions' });
             }
@@ -136,9 +137,9 @@ export function requireAuth(permission: Permission) {
     }
 
     const keyPerms = getPermissionsForScope(keyRow.scope);
-    if (!hasPermission(keyPerms, permission)) {
+    if (!perms.some((p) => hasPermission(keyPerms, p))) {
       console.log(
-        `[${localTimestamp()}] AUTH_FAIL: API key scope "${keyRow.scope}" lacks permission "${permission}" from ${request.ip}`,
+        `[${localTimestamp()}] AUTH_FAIL: API key scope "${keyRow.scope}" lacks permission "${perms.join(' | ')}" from ${request.ip}`,
       );
       return reply.code(403).send({ error: 'Insufficient permissions' });
     }

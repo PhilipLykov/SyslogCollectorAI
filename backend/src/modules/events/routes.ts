@@ -6,6 +6,11 @@ import { localTimestamp } from '../../config/index.js';
 import { invalidateAiConfigCache } from '../llm/aiConfig.js';
 import { writeAuditLog } from '../../middleware/audit.js';
 
+/** Escape LIKE/ILIKE wildcards in user input to prevent pattern injection. */
+function escapeLike(value: string): string {
+  return value.replace(/[%_\\]/g, '\\$&');
+}
+
 /** Allowed sort columns — prevents SQL injection via sort_by param. */
 const ALLOWED_SORT_COLUMNS = new Set([
   'timestamp',
@@ -129,7 +134,7 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
         const trimmed = q.trim();
         if (q_mode === 'contains') {
           // ILIKE substring search (slower, but exact match)
-          baseQuery.where('events.message', 'ILIKE', `%${trimmed}%`);
+          baseQuery.where('events.message', 'ILIKE', `%${escapeLike(trimmed)}%`);
         } else {
           // PostgreSQL full-text search using websearch_to_tsquery
           // websearch_to_tsquery supports natural language: "error OR warning", "connection refused", etc.
@@ -309,13 +314,13 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
         query.where('events.trace_id', trimmedValue);
       } else if (searchField === 'message') {
         // Use ILIKE for message tracing (exact substring match is more useful for correlation IDs)
-        query.where('events.message', 'ILIKE', `%${trimmedValue}%`);
+        query.where('events.message', 'ILIKE', `%${escapeLike(trimmedValue)}%`);
       } else {
         // 'all': search trace_id OR in message
         query.where(function () {
           this.where('events.trace_id', trimmedValue)
             .orWhere('events.span_id', trimmedValue)
-            .orWhere('events.message', 'ILIKE', `%${trimmedValue}%`);
+            .orWhere('events.message', 'ILIKE', `%${escapeLike(trimmedValue)}%`);
         });
       }
 
@@ -396,17 +401,16 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
       const body = request.body as any ?? {};
       const { system_id, from, to } = body;
 
-      // "to" defaults to now
-      const toTs = to ? new Date(to).toISOString() : new Date().toISOString();
-      const fromTs = from ? new Date(from).toISOString() : null;
-
-      // Validate dates
+      // Validate dates before parsing
       if (from && isNaN(Date.parse(from))) {
         return reply.code(400).send({ error: '"from" must be a valid ISO date string.' });
       }
       if (to && isNaN(Date.parse(to))) {
         return reply.code(400).send({ error: '"to" must be a valid ISO date string.' });
       }
+
+      const toTs = to ? new Date(to).toISOString() : new Date().toISOString();
+      const fromTs = from ? new Date(from).toISOString() : null;
 
       try {
         let query = db('events')
@@ -489,15 +493,15 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
       const body = request.body as any ?? {};
       const { system_id, from, to } = body;
 
-      const toTs = to ? new Date(to).toISOString() : new Date().toISOString();
-      const fromTs = from ? new Date(from).toISOString() : null;
-
       if (from && isNaN(Date.parse(from))) {
         return reply.code(400).send({ error: '"from" must be a valid ISO date string.' });
       }
       if (to && isNaN(Date.parse(to))) {
         return reply.code(400).send({ error: '"to" must be a valid ISO date string.' });
       }
+
+      const toTs = to ? new Date(to).toISOString() : new Date().toISOString();
+      const fromTs = from ? new Date(from).toISOString() : null;
 
       try {
         let query = db('events')

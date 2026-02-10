@@ -13,6 +13,9 @@
   --yellow: #facc15;     /* Lighter yellow for contrast */
   --orange: #fb923c;     /* Lighter orange for contrast */
   --red: #f87171;        /* Lighter red for contrast */
+  --danger: #f87171;      /* Alias for --red */
+  --muted: #9ca0b8;       /* Alias for --text-muted */
+  --surface: #1e2130;     /* Slightly lighter than --bg-card for layered surfaces */
   --radius: 8px;
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
 }
@@ -1490,6 +1493,26 @@ input:focus-visible,
   background: rgba(248, 113, 113, 0.1);
 }
 
+.btn-success-outline {
+  background: transparent;
+  border: 1px solid var(--green);
+  color: var(--green);
+}
+
+.btn-success-outline:hover {
+  background: rgba(74, 222, 128, 0.1);
+}
+
+.btn-primary {
+  background: var(--primary);
+  color: #fff;
+  border: 1px solid var(--primary);
+}
+
+.btn-primary:hover {
+  opacity: 0.9;
+}
+
 /* ── Error message dismiss ─────────────────────────────── */
 
 .error-msg {
@@ -2145,7 +2168,7 @@ input:focus-visible,
   color: var(--text);
 }
 
-.tok-opt-row input[type="number"] {
+.tok-opt-row input[type="text"] {
   padding: 4px 8px;
   border: 1px solid var(--border);
   border-radius: 4px;
@@ -3934,7 +3957,8 @@ tr.event-row-acked:hover {
   text-transform: capitalize;
 }
 
-.db-status-success {
+.db-status-success,
+.badge-ok {
   background: rgba(34, 197, 94, 0.15);
   color: #16a34a;
 }

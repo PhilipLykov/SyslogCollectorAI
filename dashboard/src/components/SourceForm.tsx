@@ -205,14 +205,13 @@ export function SourceForm({
             <label htmlFor="source-priority">Priority</label>
             <input
               id="source-priority"
-              type="number"
+              type="text"
+              inputMode="numeric"
               value={priority}
               onChange={(e) => {
                 setPriority(e.target.value);
                 if (errors.priority) setErrors((prev) => ({ ...prev, priority: '' }));
               }}
-              min={0}
-              step={1}
               className="input-short"
               aria-describedby="priority-help"
               aria-invalid={!!errors.priority}

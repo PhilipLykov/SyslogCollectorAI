@@ -4,6 +4,7 @@ import { getDb } from '../../db/index.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { PERMISSIONS } from '../../middleware/permissions.js';
 import { localTimestamp } from '../../config/index.js';
+import { writeAuditLog } from '../../middleware/audit.js';
 import type { CreateSystemBody, UpdateSystemBody } from '../../types/index.js';
 
 /**
@@ -65,6 +66,16 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
         updated_at: now,
       });
 
+      await writeAuditLog(db, {
+        action: 'system_create',
+        resource_type: 'system',
+        resource_id: id,
+        details: { name: name.trim(), retention_days: retention_days ?? null },
+        ip: request.ip,
+        user_id: request.currentUser?.id,
+        session_id: request.currentSession?.id,
+      });
+
       app.log.info(`[${localTimestamp()}] System created: id=${id}, name="${name}"`);
       const created = await db('monitored_systems').where({ id }).first();
       return reply.code(201).send(created);
@@ -105,6 +116,16 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
       }
 
       await db('monitored_systems').where({ id }).update(updates);
+
+      await writeAuditLog(db, {
+        action: 'system_update',
+        resource_type: 'system',
+        resource_id: id,
+        details: { name: updates.name, description: updates.description, retention_days: updates.retention_days },
+        ip: request.ip,
+        user_id: request.currentUser?.id,
+        session_id: request.currentSession?.id,
+      });
 
       app.log.info(`[${localTimestamp()}] System updated: id=${id}`);
       const updated = await db('monitored_systems').where({ id }).first();
@@ -152,6 +173,16 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
         await trx('message_templates').where({ system_id: id }).del();
         // Delete the system itself
         await trx('monitored_systems').where({ id }).del();
+      });
+
+      await writeAuditLog(db, {
+        action: 'system_delete',
+        resource_type: 'system',
+        resource_id: id,
+        details: { name: existing.name },
+        ip: request.ip,
+        user_id: request.currentUser?.id,
+        session_id: request.currentSession?.id,
       });
 
       app.log.info(`[${localTimestamp()}] System deleted (with cascade): id=${id}`);

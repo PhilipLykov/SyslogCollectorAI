@@ -21,7 +21,7 @@ export async function registerRoleRoutes(app: FastifyInstance): Promise<void> {
   // Returns all roles with their permissions.
   app.get(
     '/api/v1/roles',
-    { preHandler: requireAuth(PERMISSIONS.USERS_MANAGE) },
+    { preHandler: requireAuth([PERMISSIONS.USERS_MANAGE, PERMISSIONS.ROLES_MANAGE]) },
     async (_request, reply) => {
       const roles: RoleRow[] = await db('roles').orderBy('name').select('*');
       const allPerms: Array<{ role_name: string; permission: string }> = await db('role_permissions').select('*');
@@ -51,7 +51,7 @@ export async function registerRoleRoutes(app: FastifyInstance): Promise<void> {
   // Returns the master list of all known permissions with labels and categories.
   app.get(
     '/api/v1/roles/permissions',
-    { preHandler: requireAuth(PERMISSIONS.USERS_MANAGE) },
+    { preHandler: requireAuth([PERMISSIONS.USERS_MANAGE, PERMISSIONS.ROLES_MANAGE]) },
     async (_request, reply) => {
       return reply.send(ALL_PERMISSIONS);
     },

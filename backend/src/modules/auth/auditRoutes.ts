@@ -3,6 +3,11 @@ import { getDb } from '../../db/index.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { PERMISSIONS } from '../../middleware/permissions.js';
 
+/** Escape LIKE/ILIKE wildcards in user input. */
+function escapeLike(value: string): string {
+  return value.replace(/[%_\\]/g, '\\$&');
+}
+
 export async function registerAuditRoutes(app: FastifyInstance): Promise<void> {
   const db = getDb();
 
@@ -41,8 +46,8 @@ export async function registerAuditRoutes(app: FastifyInstance): Promise<void> {
         countQuery = countQuery.where('resource_type', request.query.resource_type);
       }
       if (request.query.actor) {
-        query = query.where('actor', 'ilike', `%${request.query.actor}%`);
-        countQuery = countQuery.where('actor', 'ilike', `%${request.query.actor}%`);
+        query = query.where('actor', 'ilike', `%${escapeLike(request.query.actor)}%`);
+        countQuery = countQuery.where('actor', 'ilike', `%${escapeLike(request.query.actor)}%`);
       }
       if (request.query.user_id) {
         query = query.where('user_id', request.query.user_id);

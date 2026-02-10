@@ -1,4 +1,4 @@
-import { config } from '../../config/index.js';
+import { config, localTimestamp } from '../../config/index.js';
 import type { NormalizedEvent } from '../../types/index.js';
 
 const REDACT_PLACEHOLDER = '***REDACTED***';
@@ -45,7 +45,7 @@ function getPatterns(): RegExp[] {
     try {
       _compiledPatterns.push(new RegExp(trimmed, 'gi'));
     } catch {
-      console.warn(`[redaction] Invalid extra pattern ignored: ${trimmed}`);
+      console.warn(`[${localTimestamp()}] [redaction] Invalid extra pattern ignored: ${trimmed}`);
     }
   }
 

@@ -1,6 +1,6 @@
 {
   "name": "syslog-collector-ai-backend",
-  "version": "0.1.0",
+  "version": "0.7.1",
   "description": "AI Log Audit and Analysis Solution - Backend",
   "private": true,
   "type": "module",

@@ -133,9 +133,8 @@ export function SystemForm({
             {retentionMode === 'custom' && (
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px' }}>
                 <input
-                  type="number"
-                  min={0}
-                  max={3650}
+                  type="text"
+                  inputMode="numeric"
                   value={retentionDays}
                   onChange={(e) => setRetentionDays(e.target.value)}
                   placeholder="90"

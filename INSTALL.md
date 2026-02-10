@@ -30,7 +30,7 @@ Get up and running in under 5 minutes.
 ### Prerequisites
 
 - **Docker** 20.10+ with **Docker Compose** v2
-- An **OpenAI API key** (or any OpenAI-compatible API key)
+- An **OpenAI API key** (optional — configurable via UI after first login)
 - **PostgreSQL 14+** (optional — a bundled PostgreSQL is available)
 
 ### Steps
@@ -699,7 +699,7 @@ docker compose logs backend | grep -A 5 "BOOTSTRAP"
 
 - Check logs: `docker compose logs backend`
 - Verify PostgreSQL is healthy: `docker compose ps`
-- Ensure `.env` has valid `DB_PASSWORD` and `OPENAI_API_KEY`
+- Ensure `.env` has valid `DB_PASSWORD`
 
 ### Dashboard shows "Network Error"
 
