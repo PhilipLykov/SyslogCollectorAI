@@ -23,7 +23,7 @@ export function NumericInput({
   onChange,
   min,
   max,
-  step,
+  step: _step,
   className,
   style,
   disabled,

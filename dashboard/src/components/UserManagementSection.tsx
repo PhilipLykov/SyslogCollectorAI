@@ -20,9 +20,9 @@ interface Props {
 export function UserManagementSection({ onAuthError, currentUser }: Props) {
   const [users, setUsers] = useState<UserInfo[]>([]);
   const FALLBACK_ROLES: RoleInfo[] = [
-    { name: 'administrator', display_name: 'Administrator', description: 'Full access', is_system: true, permissions: [] },
-    { name: 'auditor', display_name: 'Auditor', description: 'Read-only auditor', is_system: true, permissions: [] },
-    { name: 'monitoring_agent', display_name: 'Monitoring Agent', description: 'Default monitoring role', is_system: true, permissions: [] },
+    { name: 'administrator', display_name: 'Administrator', description: 'Full access', is_system: true, permissions: [], created_at: '', updated_at: '' },
+    { name: 'auditor', display_name: 'Auditor', description: 'Read-only auditor', is_system: true, permissions: [], created_at: '', updated_at: '' },
+    { name: 'monitoring_agent', display_name: 'Monitoring Agent', description: 'Default monitoring role', is_system: true, permissions: [], created_at: '', updated_at: '' },
   ];
   const [roles, setRoles] = useState<RoleInfo[]>(FALLBACK_ROLES);
   const [loading, setLoading] = useState(true);
