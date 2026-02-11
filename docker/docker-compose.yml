@@ -82,9 +82,11 @@ services:
       # OpenTelemetry OTLP port (gRPC + HTTP on same port)
       - OTEL_PORT=${OTEL_PORT:-4318}
       # LogSentinel AI backend connection
+      # INGEST_API_KEY is required when using the collector profile.
+      # Generate one in the dashboard: Settings → API Keys.
       - INGEST_HOST=backend
       - INGEST_PORT=3000
-      - INGEST_API_KEY=${INGEST_API_KEY:?Set INGEST_API_KEY in .env}
+      - INGEST_API_KEY=${INGEST_API_KEY:-}
       # Fluent Bit log level (error, warn, info, debug, trace)
       - LOG_LEVEL=${COLLECTOR_LOG_LEVEL:-info}
     volumes:
