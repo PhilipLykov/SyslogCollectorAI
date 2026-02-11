@@ -26,43 +26,51 @@ export async function createWindows(
   const created: Array<{ id: string; system_id: string; from_ts: string; to_ts: string }> = [];
 
   for (const system of systems) {
-    const eventSource = getEventSource(system, db);
-    // Find the latest window end for this system
-    const lastWindow = await db('windows')
-      .where({ system_id: system.id })
-      .orderBy('to_ts', 'desc')
-      .first();
+    try {
+      const eventSource = getEventSource(system, db);
+      // Find the latest window end for this system
+      const lastWindow = await db('windows')
+        .where({ system_id: system.id })
+        .orderBy('to_ts', 'desc')
+        .first();
 
-    let fromTime: number;
-    if (lastWindow) {
-      fromTime = new Date(lastWindow.to_ts).getTime();
-    } else {
-      // First window: start from windowMinutes ago
-      fromTime = now.getTime() - windowMs;
-    }
-
-    // Create multiple windows if the gap is larger than windowMinutes
-    while (fromTime + windowMs <= now.getTime()) {
-      const from_ts = new Date(fromTime).toISOString();
-      const to_ts = new Date(fromTime + windowMs).toISOString();
-
-      // Check if there are events in this range — via EventSource abstraction
-      const eventCount = await eventSource.countEventsInTimeRange(system.id, from_ts, to_ts);
-
-      if (eventCount > 0) {
-        const id = uuidv4();
-        await db('windows').insert({
-          id,
-          system_id: system.id,
-          from_ts,
-          to_ts,
-          trigger: 'time',
-        });
-
-        created.push({ id, system_id: system.id, from_ts, to_ts });
+      let fromTime: number;
+      if (lastWindow) {
+        fromTime = new Date(lastWindow.to_ts).getTime();
+      } else {
+        // First window: start from windowMinutes ago
+        fromTime = now.getTime() - windowMs;
       }
 
-      fromTime += windowMs;
+      // Create multiple windows if the gap is larger than windowMinutes
+      while (fromTime + windowMs <= now.getTime()) {
+        const from_ts = new Date(fromTime).toISOString();
+        const to_ts = new Date(fromTime + windowMs).toISOString();
+
+        // Check if there are events in this range — via EventSource abstraction
+        const eventCount = await eventSource.countEventsInTimeRange(system.id, from_ts, to_ts);
+
+        if (eventCount > 0) {
+          const id = uuidv4();
+          await db('windows').insert({
+            id,
+            system_id: system.id,
+            from_ts,
+            to_ts,
+            trigger: 'time',
+          });
+
+          created.push({ id, system_id: system.id, from_ts, to_ts });
+        }
+
+        fromTime += windowMs;
+      }
+    } catch (err: any) {
+      // Per-system error handling: log and continue with other systems.
+      // Prevents one failing system (e.g. ES connection down) from blocking all.
+      console.error(
+        `[${localTimestamp()}] Windowing: error processing system "${system.name}" (${system.id}): ${err.message}`,
+      );
     }
   }
 

@@ -125,7 +125,15 @@ export async function getEsClient(connectionId: string, db?: Knex): Promise<Clie
     createdAt: new Date().toISOString(),
   });
 
-  console.log(`[${localTimestamp()}] ES: created client for connection "${row.name}" (${row.url})`);
+  // Sanitize URL before logging to prevent credential leakage (OWASP A02)
+  let safeUrl = row.url;
+  try {
+    const u = new URL(row.url);
+    if (u.username || u.password) { u.username = '***'; u.password = '***'; }
+    safeUrl = u.toString();
+  } catch { safeUrl = '<invalid-url>'; }
+
+  console.log(`[${localTimestamp()}] ES: created client for connection "${row.name}" (${safeUrl})`);
   return client;
 }
 

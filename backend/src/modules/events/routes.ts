@@ -5,14 +5,26 @@ import { PERMISSIONS } from '../../middleware/permissions.js';
 import { localTimestamp } from '../../config/index.js';
 import { invalidateAiConfigCache } from '../llm/aiConfig.js';
 import { writeAuditLog } from '../../middleware/audit.js';
-import { getDefaultEventSource } from '../../services/eventSourceFactory.js';
+import { getDefaultEventSource, getEventSource } from '../../services/eventSourceFactory.js';
 
 /**
  * Event search, facet, and trace endpoints.
+ *
+ * When a system_id filter is present, the request is dispatched to the
+ * correct EventSource (PG or ES) for that system.  Cross-system queries
+ * (no system_id) use the default PgEventSource.
  */
 export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
   const db = getDb();
-  const eventSource = getDefaultEventSource(db);
+  const defaultEventSource = getDefaultEventSource(db);
+
+  /** Resolve the EventSource for a given system_id, or fall back to default. */
+  async function resolveEventSource(systemId?: string) {
+    if (!systemId) return defaultEventSource;
+    const system = await db('monitored_systems').where({ id: systemId }).first();
+    if (!system) return defaultEventSource;
+    return getEventSource(system, db);
+  }
 
   // ── Search events (global, cross-system) ──────────────────
   app.get<{
@@ -38,6 +50,7 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
     { preHandler: requireAuth(PERMISSIONS.EVENTS_VIEW) },
     async (request, reply) => {
       try {
+        const eventSource = await resolveEventSource(request.query.system_id);
         const result = await eventSource.searchEvents({
           q: request.query.q,
           q_mode: request.query.q_mode as 'fulltext' | 'contains' | undefined,
@@ -74,6 +87,7 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
       const rawDays = Number(request.query.days ?? 7);
       const days = Number.isFinite(rawDays) && rawDays > 0 ? Math.min(rawDays, 90) : 7;
 
+      const eventSource = await resolveEventSource(system_id);
       const facets = await eventSource.getFacets(system_id, days);
 
       // Systems list is always from PG (not event-source dependent)
@@ -123,7 +137,8 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
       const searchField = (field || 'all') as 'trace_id' | 'message' | 'all';
 
       try {
-        const traceResult = await eventSource.traceEvents(trimmedValue, searchField, fromTs, toTs, limit);
+        // Trace searches across the default PG source (cross-system)
+        const traceResult = await defaultEventSource.traceEvents(trimmedValue, searchField, fromTs, toTs, limit);
 
         // Group by system for the frontend timeline
         const bySystem: Record<string, { system_id: string; system_name: string; events: any[] }> = {};
@@ -179,6 +194,7 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
       const fromTs = from ? new Date(from).toISOString() : null;
 
       try {
+        const eventSource = await resolveEventSource(system_id);
         const totalAcked = await eventSource.acknowledgeEvents({
           system_id,
           from: fromTs,
@@ -237,6 +253,7 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
       const fromTs = from ? new Date(from).toISOString() : null;
 
       try {
+        const eventSource = await resolveEventSource(system_id);
         const result = await eventSource.unacknowledgeEvents({
           system_id,
           from: fromTs,

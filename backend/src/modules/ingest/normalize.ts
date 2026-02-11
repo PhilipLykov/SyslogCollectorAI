@@ -102,12 +102,21 @@ export function normalizeEntry(entry: IngestEntry): NormalizedEvent | null {
     }
   }
 
-  // Final normalization: convert numbers to names, lowercase strings
+  // Final normalization: convert numbers to names, lowercase strings.
+  // Also handle numeric strings like "7" (common with rsyslog omhttp / Fluent Bit).
   if (typeof severity === 'number') {
     severity = syslogSeverityToString(severity);
   } else if (typeof severity === 'string') {
     const trimmed = severity.toLowerCase().trim();
-    severity = trimmed.length > 0 ? trimmed : undefined;
+    if (trimmed.length === 0) {
+      severity = undefined;
+    } else if (/^\d+$/.test(trimmed)) {
+      // Pure numeric string (e.g. "7") — treat as syslog severity number
+      const num = Number(trimmed);
+      severity = (num >= 0 && num <= 7) ? syslogSeverityToString(num) : trimmed;
+    } else {
+      severity = trimmed;
+    }
   } else {
     severity = undefined;
   }

@@ -144,25 +144,6 @@ export class EsEventSource implements EventSource {
     };
   }
 
-  /** Add time range to a bool query. */
-  private addTimeRange(
-    boolQuery: Record<string, any>,
-    fromTs?: string | null,
-    toTs?: string | null,
-    operator: 'gte_lte' | 'gte_lt' = 'gte_lte',
-  ): void {
-    if (!fromTs && !toTs) return;
-    const tsField = this.esField('timestamp');
-    const range: Record<string, string> = {};
-    if (fromTs) range.gte = fromTs;
-    if (toTs) range[operator === 'gte_lt' ? 'lt' : 'lte'] = toTs;
-
-    const filter = (boolQuery as any).bool?.filter ?? [];
-    filter.push({ range: { [tsField]: range } });
-    if (!(boolQuery as any).bool) (boolQuery as any).bool = {};
-    (boolQuery as any).bool.filter = filter;
-  }
-
   // ── Search & retrieval ─────────────────────────────────────
 
   async searchEvents(filters: EventSearchFilters): Promise<EventSearchResult> {
@@ -358,6 +339,7 @@ export class EsEventSource implements EventSource {
     });
 
     const events = (result.hits?.hits ?? []).map((h: any) => this.hitToLogEvent(h));
+    await this.enrichWithMetadata(events);
 
     return { events, total: events.length };
   }
@@ -564,7 +546,7 @@ export class EsEventSource implements EventSource {
       const searchOpts: any = {
         index: base.index,
         query: { bool: { filter: esFilter } },
-        sort: [{ [tsField]: { order: 'asc', unmapped_type: 'date' } }, { _id: 'asc' }],
+        sort: [{ [tsField]: { order: 'asc' as const, unmapped_type: 'date' } }, { _id: 'asc' as const }],
         size: BATCH_SIZE,
         _source: false,
       };
@@ -604,14 +586,8 @@ export class EsEventSource implements EventSource {
   }
 
   async unacknowledgeEvents(filters: AckFilters): Promise<number> {
-    // Remove acknowledgment from es_event_metadata
-    let query = this.db('es_event_metadata')
-      .where({ system_id: this.systemId })
-      .whereNotNull('acknowledged_at');
-
-    // We also need to match the time range. Since es_event_metadata doesn't
-    // store timestamps, we need to query ES for the matching IDs first,
-    // then clear ack in PG.
+    // Match the time range by querying ES for the matching IDs first,
+    // then clear ack in PG's es_event_metadata.
     const client = await this.getClient();
     const base = this.baseQuery();
     const esFilter: any[] = [];
@@ -627,7 +603,7 @@ export class EsEventSource implements EventSource {
     const result = await client.search({
       index: base.index,
       query: { bool: { filter: esFilter } },
-      sort: [{ [tsField]: { order: 'asc', unmapped_type: 'date' } }],
+      sort: [{ [tsField]: { order: 'asc' as const, unmapped_type: 'date' } }],
       size: 10000,
       _source: false,
     });
@@ -654,15 +630,31 @@ export class EsEventSource implements EventSource {
 
   async deleteOldEvents(_systemId: string, _cutoffIso: string): Promise<BulkDeleteResult> {
     // Cannot delete events from a read-only ES cluster.
-    // We can only clean up local metadata.
-    console.log(`[${localTimestamp()}] ES: deleteOldEvents is a no-op for Elasticsearch-backed systems (read-only). Cleaning metadata only.`);
+    // We can only clean up local PG metadata and orphaned scores.
+    console.log(`[${localTimestamp()}] ES: deleteOldEvents is a no-op for Elasticsearch-backed systems (read-only). Cleaning PG metadata + scores only.`);
 
-    const deleted = await this.db('es_event_metadata')
+    // Find old metadata IDs to also clean up their event_scores
+    const oldMetaIds = await this.db('es_event_metadata')
+      .where({ system_id: this.systemId })
+      .where('created_at', '<', _cutoffIso)
+      .pluck('es_event_id');
+
+    let deletedScores = 0;
+    // Delete associated event_scores in batches
+    for (let i = 0; i < oldMetaIds.length; i += 500) {
+      const chunk = oldMetaIds.slice(i, i + 500);
+      deletedScores += await this.db('event_scores').whereIn('event_id', chunk).del();
+    }
+
+    // Delete the metadata rows
+    const deletedMeta = await this.db('es_event_metadata')
       .where({ system_id: this.systemId })
       .where('created_at', '<', _cutoffIso)
       .del();
 
-    return { deleted_events: 0, deleted_scores: deleted };
+    console.log(`[${localTimestamp()}] ES: cleaned ${deletedMeta} metadata rows and ${deletedScores} event_scores rows`);
+
+    return { deleted_events: 0, deleted_scores: deletedScores };
   }
 
   async bulkDeleteEvents(_filters: BulkDeleteFilters): Promise<BulkDeleteResult> {

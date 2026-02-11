@@ -276,32 +276,57 @@ export async function runMaintenance(db: Knex): Promise<MaintenanceRunResult> {
     // Clean up stale windows whose events have all been deleted.
     // This cascades to meta_results, effective_scores, and findings,
     // preventing stale scores from lingering on the dashboard.
+    //
+    // IMPORTANT: Only check against PG events table for PostgreSQL-backed
+    // systems.  For Elasticsearch-backed systems, events live in ES (not in
+    // the PG events table), so the NOT EXISTS check would falsely consider
+    // ALL windows as orphaned and delete them.
     try {
-      const orphanedWindows = await db('windows')
-        .whereNotExists(
-          db('events')
-            .whereRaw(`events.system_id = windows.system_id AND events."timestamp" >= windows.from_ts AND events."timestamp" <= windows.to_ts`)
-            .select(db.raw('1')),
-        )
-        .del();
-      if (orphanedWindows > 0) {
-        console.log(`[${localTimestamp()}] Maintenance: cleaned up ${orphanedWindows} orphaned analysis windows`);
+      const pgSystemIds = await db('monitored_systems')
+        .where(function () {
+          this.where('event_source', 'postgresql').orWhereNull('event_source');
+        })
+        .pluck('id');
+
+      if (pgSystemIds.length > 0) {
+        const orphanedWindows = await db('windows')
+          .whereIn('system_id', pgSystemIds)
+          .whereNotExists(
+            db('events')
+              .whereRaw(`events.system_id = windows.system_id AND events."timestamp" >= windows.from_ts AND events."timestamp" <= windows.to_ts`)
+              .select(db.raw('1')),
+          )
+          .del();
+        if (orphanedWindows > 0) {
+          console.log(`[${localTimestamp()}] Maintenance: cleaned up ${orphanedWindows} orphaned analysis windows`);
+        }
       }
     } catch (err: any) {
       errors.push(`Orphaned windows cleanup failed: ${err.message}`);
     }
 
-    // Also clean up orphaned message templates with no events
+    // Also clean up orphaned message templates with no events.
+    // Same caveat: only check PG-backed systems to avoid deleting
+    // templates that are linked to Elasticsearch events.
     try {
-      const orphanedTemplates = await db('message_templates')
-        .whereNotExists(
-          db('events')
-            .whereRaw('events.template_id = message_templates.id')
-            .select(db.raw('1')),
-        )
-        .del();
-      if (orphanedTemplates > 0) {
-        console.log(`[${localTimestamp()}] Maintenance: cleaned up ${orphanedTemplates} orphaned message templates`);
+      const pgSystemIds = await db('monitored_systems')
+        .where(function () {
+          this.where('event_source', 'postgresql').orWhereNull('event_source');
+        })
+        .pluck('id');
+
+      if (pgSystemIds.length > 0) {
+        const orphanedTemplates = await db('message_templates')
+          .whereIn('system_id', pgSystemIds)
+          .whereNotExists(
+            db('events')
+              .whereRaw('events.template_id = message_templates.id')
+              .select(db.raw('1')),
+          )
+          .del();
+        if (orphanedTemplates > 0) {
+          console.log(`[${localTimestamp()}] Maintenance: cleaned up ${orphanedTemplates} orphaned message templates`);
+        }
       }
     } catch (err: any) {
       errors.push(`Orphaned template cleanup failed: ${err.message}`);

@@ -359,7 +359,8 @@ export async function registerElasticsearchRoutes(app: FastifyInstance): Promise
     async (request, reply) => {
       const { id } = request.params;
       const { index } = request.query;
-      const size = Math.min(Number(request.query.size ?? 5), 20);
+      const rawSize = Number(request.query.size ?? 5);
+      const size = Number.isFinite(rawSize) ? Math.min(Math.max(1, rawSize), 20) : 5;
 
       if (!index) return reply.code(400).send({ error: 'index query parameter is required.' });
 

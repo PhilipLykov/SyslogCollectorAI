@@ -5,6 +5,7 @@ import { PERMISSIONS } from '../../middleware/permissions.js';
 import { CRITERIA } from '../../types/index.js';
 import { estimateCost, MODEL_PRICING } from '../llm/pricing.js';
 import { resolveAiConfig } from '../llm/aiConfig.js';
+import { getEventSource } from '../../services/eventSourceFactory.js';
 
 /**
  * Scores API — exposes effective scores, event scores, and meta results.
@@ -120,39 +121,107 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
       const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(1, rawLimit), 200) : 50;
       const minScore = Number(request.query.min_score ?? 0);
 
-      let query = db('event_scores')
-        .join('events', 'event_scores.event_id', 'events.id')
-        .join('criteria', 'event_scores.criterion_id', 'criteria.id')
-        .where('events.system_id', systemId)
-        .where('event_scores.score_type', 'event')
-        .orderBy('event_scores.score', 'desc')
-        .limit(limit)
-        .select(
-          'events.id as event_id',
-          'events.timestamp',
-          'events.message',
-          'events.severity',
-          'events.host',
-          'events.source_ip',
-          'events.program',
-          'criteria.slug as criterion_slug',
-          'criteria.name as criterion_name',
-          'event_scores.score',
-          'event_scores.severity_label',
-          'event_scores.reason_codes',
-        );
+      // Check if this is an ES-backed or PG-backed system
+      const system = await db('monitored_systems').where({ id: systemId }).first();
+      const isEsBacked = system?.event_source === 'elasticsearch';
 
-      if (criterionId) {
-        query = query.where('event_scores.criterion_id', Number(criterionId));
+      let rows: any[];
+
+      if (isEsBacked) {
+        // For ES-backed systems, event_scores.event_id contains ES _id strings
+        // which don't exist in the PG events table.  Query scores directly,
+        // then hydrate event data from Elasticsearch.
+        let scoreQuery = db('event_scores')
+          .join('criteria', 'event_scores.criterion_id', 'criteria.id')
+          .where('event_scores.system_id', systemId)
+          .where('event_scores.score_type', 'event')
+          .orderBy('event_scores.score', 'desc')
+          .limit(limit)
+          .select(
+            'event_scores.event_id',
+            'criteria.slug as criterion_slug',
+            'criteria.name as criterion_name',
+            'event_scores.score',
+            'event_scores.severity_label',
+            'event_scores.reason_codes',
+          );
+
+        if (criterionId) {
+          scoreQuery = scoreQuery.where('event_scores.criterion_id', Number(criterionId));
+        }
+        if (minScore > 0) {
+          scoreQuery = scoreQuery.where('event_scores.score', '>=', minScore);
+        }
+
+        const scoreRows = await scoreQuery;
+
+        // Hydrate event fields from ES (best-effort; if ES is down, return scores without event data)
+        try {
+          const eventSource = getEventSource(system, db);
+          const eventIds = scoreRows.map((r: any) => r.event_id);
+          if (eventIds.length > 0) {
+            // Fetch events by searching for these IDs
+            const events = await eventSource.searchEvents({
+              system_id: systemId,
+              limit: eventIds.length,
+              page: 1,
+            });
+            const eventMap = new Map(events.events.map((e: any) => [e.id, e]));
+
+            rows = scoreRows.map((r: any) => {
+              const evt = eventMap.get(r.event_id);
+              return {
+                ...r,
+                timestamp: evt?.timestamp ?? null,
+                message: evt?.message ?? null,
+                severity: evt?.severity ?? null,
+                host: evt?.host ?? null,
+                source_ip: evt?.source_ip ?? null,
+                program: evt?.program ?? null,
+              };
+            });
+          } else {
+            rows = scoreRows;
+          }
+        } catch {
+          // ES unavailable — return scores without event details
+          rows = scoreRows;
+        }
+      } else {
+        // PG-backed system: use the efficient JOIN
+        let query = db('event_scores')
+          .join('events', 'event_scores.event_id', 'events.id')
+          .join('criteria', 'event_scores.criterion_id', 'criteria.id')
+          .where('events.system_id', systemId)
+          .where('event_scores.score_type', 'event')
+          .orderBy('event_scores.score', 'desc')
+          .limit(limit)
+          .select(
+            'events.id as event_id',
+            'events.timestamp',
+            'events.message',
+            'events.severity',
+            'events.host',
+            'events.source_ip',
+            'events.program',
+            'criteria.slug as criterion_slug',
+            'criteria.name as criterion_name',
+            'event_scores.score',
+            'event_scores.severity_label',
+            'event_scores.reason_codes',
+          );
+
+        if (criterionId) {
+          query = query.where('event_scores.criterion_id', Number(criterionId));
+        }
+        // Filter out low-score events (only return events that actually
+        // contributed to the criterion score)
+        if (minScore > 0) {
+          query = query.where('event_scores.score', '>=', minScore);
+        }
+
+        rows = await query;
       }
-
-      // Filter out low-score events (only return events that actually
-      // contributed to the criterion score)
-      if (minScore > 0) {
-        query = query.where('event_scores.score', '>', minScore);
-      }
-
-      const rows = await query;
 
       // Parse reason_codes JSON safely
       const results = rows.map((r: any) => {
