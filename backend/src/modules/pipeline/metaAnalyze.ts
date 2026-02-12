@@ -298,7 +298,7 @@ export async function metaAnalyzeWindow(
 
   // ── Finding deduplication (post-LLM safety net) ─────────
   // Build OpenFinding[] from context for dedup module
-  const openFindingsForDedup: OpenFinding[] = context.openFindings.map((f: any) => ({
+  const openFindingsForDedup: OpenFinding[] = context.openFindings.map((f) => ({
     id: f._dbId,
     text: f.text,
     severity: f.severity,
@@ -431,9 +431,12 @@ export async function metaAnalyzeWindow(
 
     // ── Persist NEW findings (after dedup) ────────────────
     const nowIso = new Date().toISOString();
+    const newlyInsertedIds: string[] = [];
     for (const finding of findingsToInsert) {
+      const newId = uuidv4();
+      newlyInsertedIds.push(newId);
       await trx('findings').insert({
-        id: uuidv4(),
+        id: newId,
         system_id: system.id,
         meta_result_id: metaId,
         text: finding.text,
@@ -527,7 +530,10 @@ export async function metaAnalyzeWindow(
       }
     }
     // Add newly inserted finding IDs (they start at consecutive_misses=0)
-    // and reopened finding IDs (they were reset to consecutive_misses=0)
+    for (const id of newlyInsertedIds) {
+      excludeFromMissIds.add(id);
+    }
+    // Add reopened finding IDs (they were reset to consecutive_misses=0)
     for (const reopen of findingsToReopen) {
       excludeFromMissIds.add(reopen.id);
     }
