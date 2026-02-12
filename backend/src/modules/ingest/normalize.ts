@@ -137,6 +137,7 @@ export function normalizeEntry(entry: IngestEntry): NormalizedEvent | null {
     'span_id', 'spanId',
     'external_id', 'connector_id',
     'pri', 'msgid', 'extradata', // Syslog RFC 5424 parsed fields (consumed above)
+    'ident', 'pid',              // Syslog parser fields (ident → program via Fluent Bit filter)
     'collector', 'collector_host', // Fluent Bit metadata fields
     'raw', // Connector adapters pass pre-built raw — don't nest it
   ]);
@@ -162,15 +163,26 @@ export function normalizeEntry(entry: IngestEntry): NormalizedEvent | null {
   // indicates a higher severity than the syslog header provided.
   const enrichedSeverity = enrichSeverityFromContent(message.trim(), severity);
 
+  // Clean source_ip: Fluent Bit's source_address_key produces transport
+  // addresses like "udp://192.168.30.14:52502" or "tcp://10.0.0.1:44321".
+  // Extract just the IP address.
+  const rawSourceIp = stringField(entry, 'source_ip', 'fromhost_ip', 'fromhost-ip', 'ip', 'client_ip', 'src_ip');
+  const source_ip = cleanTransportAddress(rawSourceIp);
+
+  // Resolve host: many network devices (Cisco, MikroTik, etc.) don't include
+  // a hostname in the syslog header. Fall back to the clean source IP so the
+  // event is still identifiable and matchable by log source selectors.
+  const host = stringField(entry, 'host', 'hostname', 'source') || source_ip;
+
   return {
     timestamp,
     message: message.trim(),
     severity: enrichedSeverity ?? undefined,
-    host: stringField(entry, 'host', 'hostname', 'source'),
-    source_ip: stringField(entry, 'source_ip', 'fromhost_ip', 'fromhost-ip', 'ip', 'client_ip', 'src_ip'),
+    host,
+    source_ip,
     service: stringField(entry, 'service', 'service_name', 'application'),
     facility: stringField(entry, 'facility', 'syslog_facility'),
-    program: stringField(entry, 'program', 'app_name', 'appname'),
+    program: stringField(entry, 'program', 'ident', 'app_name', 'appname'),
     trace_id: stringField(entry, 'trace_id', 'traceId'),
     span_id: stringField(entry, 'span_id', 'spanId'),
     raw: mergedRaw,
@@ -221,6 +233,55 @@ function stringField(entry: Record<string, unknown>, ...keys: string[]): string 
     if (typeof v === 'string' && v.length > 0) return v;
   }
   return undefined;
+}
+
+/**
+ * Extract a clean IP address from a transport address string.
+ *
+ * Fluent Bit's `source_address_key` produces values like:
+ *   - "udp://192.168.30.14:52502"
+ *   - "tcp://10.0.0.1:44321"
+ *   - "unix:///var/run/syslog.sock"
+ *   - "192.168.1.1"          (already clean)
+ *   - "[::1]:5140"           (IPv6 with port)
+ *   - "::1"                  (IPv6 without port)
+ *
+ * Returns just the IP address, or undefined if unparseable.
+ */
+function cleanTransportAddress(raw: string | undefined): string | undefined {
+  if (!raw || raw.length === 0) return undefined;
+
+  let addr = raw.trim();
+
+  // Strip protocol prefix (udp://, tcp://, unix://, etc.)
+  const protoIdx = addr.indexOf('://');
+  if (protoIdx >= 0) {
+    addr = addr.substring(protoIdx + 3);
+  }
+
+  // Handle IPv6 in brackets: [::1]:12345 → ::1
+  if (addr.startsWith('[')) {
+    const bracketEnd = addr.indexOf(']');
+    if (bracketEnd > 0) {
+      addr = addr.substring(1, bracketEnd);
+    }
+    return addr.length > 0 ? addr : undefined;
+  }
+
+  // Handle IPv4 with port: 192.168.1.1:52502 → 192.168.1.1
+  // Only strip if what follows the last colon is a pure numeric port.
+  const lastColon = addr.lastIndexOf(':');
+  if (lastColon > 0) {
+    const afterColon = addr.substring(lastColon + 1);
+    if (/^\d{1,5}$/.test(afterColon)) {
+      addr = addr.substring(0, lastColon);
+    }
+  }
+
+  // Reject unix socket paths or other non-IP values
+  if (addr.includes('/')) return undefined;
+
+  return addr.length > 0 ? addr : undefined;
 }
 
 /** Safely coerce to string or return undefined. */
