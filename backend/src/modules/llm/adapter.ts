@@ -62,6 +62,13 @@ export interface MetaAnalysisResult {
   resolvedFindingIndices: number[];
   /** Structured resolution entries with evidence strings. */
   resolvedFindings: ResolvedFindingEntry[];
+  /**
+   * Indices (from openFindings) the LLM confirms are **still active** — i.e. the
+   * underlying issue is still happening or there is no evidence of resolution.
+   * This is the inverse of resolvedFindingIndices: any index NOT in either list
+   * is treated as "uncertain" and will age out via consecutive_misses over time.
+   */
+  stillActiveFindingIndices: number[];
   recommended_action?: string;
   key_event_ids?: string[];
 }
@@ -268,11 +275,22 @@ Return a JSON object with:
     - text: specific, actionable finding description
     - severity: one of "critical", "high", "medium", "low", "info" (use the calibration definitions above)
     - criterion: most relevant criterion slug (it_security, performance_degradation, failure_prediction, anomaly, compliance_audit, operational_risk) or null
-- resolved_indices: array of objects with "index" (integer from the "Previously open findings" list) and "evidence" (brief explanation of what confirms resolution). Only include findings that clearly should be closed. Example: [{"index": 0, "evidence": "disk space restored to normal levels"}]. Plain integers are also accepted for backward compatibility.
+- resolved_indices: array of objects with "index" (integer from the "Previously open findings" list) and "evidence" (brief explanation of what confirms resolution). Only include findings where you see EXPLICIT POSITIVE EVIDENCE of resolution IN THE CURRENT EVENTS. Example: [{"index": 0, "evidence": "disk space restored to normal levels"}]. Plain integers are also accepted for backward compatibility.
+- still_active_indices: array of integers — indices of open findings that you can confirm are STILL ACTIVE based on the current events. If you see error events that match an existing open finding (even partially), include that finding's index here. This tells the system "yes, this issue is still happening, do not age it out."
 - recommended_action: one short recommended action (optional)
 
-RESOLUTION DETECTION:
-When you see events that indicate a previously reported issue is now resolved (e.g., 'disk space restored to normal', 'service recovered', 'connectivity restored', 'error rate returned to baseline'), resolve the corresponding finding by including its index in resolved_indices with a brief evidence string explaining what event(s) confirm resolution. Be specific in matching — 'disk C restored' resolves a finding about 'disk C low space', NOT a finding about 'disk D low space'. Format: resolved_indices: [{ "index": 0, "evidence": "Event 'disk C space restored to 85%' confirms resolution" }]
+FINDING LIFECYCLE — THIS IS CRITICAL:
+For each open finding listed in "Previously open findings", you MUST classify it into exactly ONE of these categories:
+1. RESOLVED — you see explicit positive evidence IN THE CURRENT EVENTS that the issue is fixed (e.g., "disk space restored", "service recovered"). Add to resolved_indices with evidence.
+2. STILL ACTIVE — you see events in the current window that relate to or confirm this issue is still ongoing. Add to still_active_indices.
+3. UNCERTAIN — you see NO events related to this finding in the current window (neither confirming nor denying). Do NOT add to either list. The system will track this separately via an aging mechanism.
+
+RESOLUTION RULES (STRICT):
+- NEVER resolve a finding just because it was not mentioned in the current events. Absence of evidence is NOT evidence of resolution.
+- ONLY resolve a finding when you see a SPECIFIC EVENT in the current window that POSITIVELY CONFIRMS the issue is fixed.
+- Be specific in matching — "disk C restored" resolves "disk C low space", NOT "disk D low space".
+- If in doubt, do NOT resolve. It is far better to leave a finding open than to incorrectly mark it resolved.
+- The system has its own aging mechanism for findings with no recent activity — you do not need to "clean up" the list.
 
 FLAPPING AWARENESS:
 Findings marked [FLAPPING] indicate issues that repeatedly appear and resolve. This oscillation pattern is itself a problem worth highlighting. If you see a finding with multiple reopens, consider whether the root cause is unresolved (e.g., insufficient disk space allocation causing repeated low-space events). Do NOT resolve flapping findings unless there is clear evidence that the root cause has been addressed. If an issue keeps recurring, create a meta-finding about the oscillation pattern itself.
@@ -285,7 +303,7 @@ IMPORTANT RULES:
 - Only create a new finding for an issue that is NOT already tracked by any open or acknowledged finding.
 - Be conservative with severity. Most operational events are "low" or "info". Reserve "critical" and "high" for genuine service-impacting issues with clear evidence.
 - Be specific and actionable. Reference event patterns, hosts, programs, or error messages where relevant.
-- Actively resolve open findings that are no longer relevant — do not let the list grow stale.
+- Do NOT resolve findings proactively just to keep the list short. The system manages aging automatically.
 - Use the finding metadata (age, occurrence count, reopen count) to make informed decisions about trends and persistence.
 
 Return ONLY valid JSON.`;
@@ -527,6 +545,16 @@ export class OpenAiAdapter implements LlmAdapter {
         }
       }
 
+      // Parse still_active_indices — the LLM confirms these findings are
+      // still happening (issue not yet resolved).  Accepts plain integer array.
+      const rawStillActive = Array.isArray(parsed.still_active_indices) ? parsed.still_active_indices : [];
+      const stillActiveFindingIndices: number[] = [];
+      for (const entry of rawStillActive) {
+        if (typeof entry === 'number' && Number.isFinite(entry)) {
+          stillActiveFindingIndices.push(Math.round(entry));
+        }
+      }
+
       return {
         result: {
           meta_scores: metaScores,
@@ -535,6 +563,7 @@ export class OpenAiAdapter implements LlmAdapter {
           findingsFlat: flatFindings,
           resolvedFindingIndices,
           resolvedFindings,
+          stillActiveFindingIndices,
           recommended_action: parsed.recommended_action,
           key_event_ids: parsed.key_event_ids,
         },

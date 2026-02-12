@@ -138,6 +138,7 @@ export function normalizeEntry(entry: IngestEntry): NormalizedEvent | null {
     'external_id', 'connector_id',
     'pri', 'msgid', 'extradata', // Syslog RFC 5424 parsed fields (consumed above)
     'ident', 'pid',              // Syslog parser fields (ident → program via Fluent Bit filter)
+    'mnemonic', 'seq',           // Cisco IOS syslog parser fields
     'collector', 'collector_host', // Fluent Bit metadata fields
     'raw', // Connector adapters pass pre-built raw — don't nest it
   ]);
@@ -169,10 +170,15 @@ export function normalizeEntry(entry: IngestEntry): NormalizedEvent | null {
   const rawSourceIp = stringField(entry, 'source_ip', 'fromhost_ip', 'fromhost-ip', 'ip', 'client_ip', 'src_ip');
   const source_ip = cleanTransportAddress(rawSourceIp);
 
-  // Resolve host: many network devices (Cisco, MikroTik, etc.) don't include
-  // a hostname in the syslog header. Fall back to the clean source IP so the
-  // event is still identifiable and matchable by log source selectors.
-  const host = stringField(entry, 'host', 'hostname', 'source') || source_ip;
+  // Resolve host: apply multiple layers of cleaning:
+  //   1. Try standard host fields
+  //   2. Clean transport-address formats (tcp://..., udp://...)
+  //   3. Validate that the result is a plausible hostname (not a misaligned
+  //      timestamp from a Cisco/network device parser failure)
+  //   4. Fall back to the clean source IP if all else fails
+  const rawHost = stringField(entry, 'host', 'hostname', 'source');
+  const cleanedHost = rawHost ? (cleanTransportAddress(rawHost) ?? rawHost) : undefined;
+  const host = (cleanedHost && isPlausibleHost(cleanedHost)) ? cleanedHost : source_ip;
 
   return {
     timestamp,
@@ -182,7 +188,7 @@ export function normalizeEntry(entry: IngestEntry): NormalizedEvent | null {
     source_ip,
     service: stringField(entry, 'service', 'service_name', 'application'),
     facility: stringField(entry, 'facility', 'syslog_facility'),
-    program: stringField(entry, 'program', 'ident', 'app_name', 'appname'),
+    program: stringField(entry, 'program', 'ident', 'app_name', 'appname', 'mnemonic'),
     trace_id: stringField(entry, 'trace_id', 'traceId'),
     span_id: stringField(entry, 'span_id', 'spanId'),
     raw: mergedRaw,
@@ -282,6 +288,43 @@ function cleanTransportAddress(raw: string | undefined): string | undefined {
   if (addr.includes('/')) return undefined;
 
   return addr.length > 0 ? addr : undefined;
+}
+
+/**
+ * Validate that a string looks like a plausible hostname or IP address.
+ *
+ * Rejects values that are clearly misaligned parser fields:
+ *   - Timestamps: "13:28:05.323:", "2024-01-15T10:30:00Z", etc.
+ *   - Bare numbers (port or sequence) without dots: "52502"
+ *   - Empty / whitespace-only strings
+ *
+ * Accepts:
+ *   - IPv4: "192.168.1.1"
+ *   - IPv6: "::1", "fe80::1"
+ *   - Hostnames: "pve", "switch-core-01", "fw.example.com"
+ */
+function isPlausibleHost(value: string): boolean {
+  if (!value || value.trim().length === 0) return false;
+
+  const v = value.trim();
+
+  // Reject if it looks like a timestamp (HH:MM:SS with optional fractional seconds)
+  if (/^\d{1,2}:\d{2}:\d{2}/.test(v)) return false;
+
+  // Reject ISO 8601-like timestamps: 2024-01-15T10:30:00
+  if (/^\d{4}-\d{2}-\d{2}[T ]/.test(v)) return false;
+
+  // Reject bare numeric values (port numbers, sequence IDs)
+  if (/^\d+$/.test(v)) return false;
+
+  // Reject strings starting with colon-separated numbers that exceed 3 groups
+  // (likely a timestamp or numeric sequence, not an IPv6 address or hostname)
+  if (/^\d+:\d+:\d+:\d+/.test(v) && !v.includes('.')) return false;
+
+  // Reject strings that are just punctuation or control chars
+  if (/^[^a-zA-Z0-9]+$/.test(v)) return false;
+
+  return true;
 }
 
 /** Safely coerce to string or return undefined. */

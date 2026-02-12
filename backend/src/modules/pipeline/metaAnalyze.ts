@@ -516,9 +516,39 @@ export async function metaAnalyzeWindow(
       }
     }
 
+    // ── Handle LLM-confirmed "still active" findings ───────
+    // The LLM can confirm that an open finding is still active even if no new
+    // duplicate finding was emitted.  We reset consecutive_misses for these and
+    // refresh last_seen_at so they don't age out.
+    const stillActiveDbIds = new Set<string>();
+    if (result.stillActiveFindingIndices.length > 0 && context.openFindings.length > 0) {
+      for (const idx of result.stillActiveFindingIndices) {
+        const openF = context.openFindings.find((f) => f.index === idx);
+        if (!openF?._dbId) continue;
+        // Skip findings that were already resolved by the LLM in the same window
+        const alreadyResolved = result.resolvedFindingIndices.includes(idx);
+        if (alreadyResolved) continue;
+        stillActiveDbIds.add(openF._dbId);
+      }
+      if (stillActiveDbIds.size > 0) {
+        await trx('findings')
+          .whereIn('id', Array.from(stillActiveDbIds))
+          .whereIn('status', ['open', 'acknowledged'])
+          .update({
+            consecutive_misses: 0,
+            last_seen_at: nowIso,
+          });
+        console.log(
+          `[${localTimestamp()}] Reset consecutive_misses for ${stillActiveDbIds.size} ` +
+          `LLM-confirmed still-active finding(s) (system ${system.id})`,
+        );
+      }
+    }
+
     // ── Increment consecutive_misses for unmatched findings ─
     // ALL open/acknowledged findings for this system that were NOT matched by
-    // dedup, NOT reopened, and NOT resolved by the LLM have "missed" a window.
+    // dedup, NOT reopened, NOT resolved by the LLM, and NOT confirmed as still
+    // active have "missed" a window.
     // Uses a system-wide query (no limit) so findings beyond the LLM context
     // cap (30) are still tracked and can eventually be auto-resolved.
     const excludeFromMissIds = new Set<string>(matchedOpenIds);
@@ -528,6 +558,10 @@ export async function metaAnalyzeWindow(
         const openF = context.openFindings.find((f) => f.index === idx);
         if (openF) excludeFromMissIds.add(openF._dbId);
       }
+    }
+    // Add LLM-confirmed still-active finding IDs (already reset above)
+    for (const id of stillActiveDbIds) {
+      excludeFromMissIds.add(id);
     }
     // Add newly inserted finding IDs (they start at consecutive_misses=0)
     for (const id of newlyInsertedIds) {
