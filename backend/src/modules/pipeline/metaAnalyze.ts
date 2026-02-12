@@ -105,6 +105,19 @@ export async function loadMetaAnalysisConfig(db: Knex): Promise<MetaAnalysisConf
   return { ...META_CONFIG_DEFAULTS };
 }
 
+/** Extended open finding — includes internal DB fields used within the pipeline. */
+interface ExtendedOpenFinding {
+  index: number; text: string; severity: string; criterion?: string;
+  status?: string; created_at?: string; last_seen_at?: string;
+  occurrence_count?: number; reopen_count?: number; is_flapping?: boolean;
+  _dbId: string; _fingerprint?: string; _occurrence_count: number; _consecutive_misses: number;
+}
+
+/** Extended context type returned by buildMetaContext — includes _dbId etc. */
+interface ExtendedMetaContext extends MetaAnalysisContext {
+  openFindings: ExtendedOpenFinding[];
+}
+
 // ── Severity decay helpers ─────────────────────────────────────
 
 const SEVERITY_DECAY_MAP: Record<string, string> = {
@@ -695,14 +708,7 @@ async function buildMetaContext(
   db: Knex,
   systemId: string,
   currentWindowId: string,
-): Promise<MetaAnalysisContext & {
-  openFindings: Array<{
-    index: number; text: string; severity: string; criterion?: string;
-    status?: string; created_at?: string; last_seen_at?: string;
-    occurrence_count?: number; reopen_count?: number; is_flapping?: boolean;
-    _dbId: string; _fingerprint?: string; _occurrence_count: number; _consecutive_misses: number;
-  }>;
-}> {
+): Promise<ExtendedMetaContext> {
   // 1. Previous window summaries (last N, excluding the current window)
   const prevMetas = await db('meta_results')
     .join('windows', 'meta_results.window_id', 'windows.id')
