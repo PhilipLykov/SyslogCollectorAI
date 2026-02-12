@@ -278,12 +278,12 @@ export function EventExplorerView({ onAuthError }: Props) {
   };
 
   const handleClickFilter = (field: 'host' | 'source_ip' | 'program' | 'severity', value: string) => {
-    const toggleIn = (prev: string[], v: string) =>
-      prev.includes(v) ? prev : [v];
-    if (field === 'host') setHostFilter((prev) => toggleIn(prev, value));
-    else if (field === 'source_ip') setSourceIpFilter((prev) => toggleIn(prev, value));
-    else if (field === 'program') setProgramFilter((prev) => toggleIn(prev, value));
-    else if (field === 'severity') setSeverityFilter((prev) => toggleIn(prev, value));
+    const addToFilter = (prev: string[], v: string) =>
+      prev.includes(v) ? prev : [...prev, v];
+    if (field === 'host') setHostFilter((prev) => addToFilter(prev, value));
+    else if (field === 'source_ip') setSourceIpFilter((prev) => addToFilter(prev, value));
+    else if (field === 'program') setProgramFilter((prev) => addToFilter(prev, value));
+    else if (field === 'severity') setSeverityFilter((prev) => addToFilter(prev, value));
     setFiltersExpanded(true);
     setFilterTrigger((t) => t + 1);
   };

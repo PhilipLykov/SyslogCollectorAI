@@ -137,26 +137,32 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
   }, [loadData, loadFindings]);
 
   // ── Seed filter options from an unfiltered fetch (runs once) ──
+  // When user applies a filter, loadData fetches only matching events.
+  // This one-time unfiltered fetch ensures dropdown options include ALL values.
   const filterSeeded = useRef(false);
   useEffect(() => {
     if (filterSeeded.current) return;
     filterSeeded.current = true;
-    fetchSystemEvents(system.id, { limit: 200 }).then((evts) => {
-      setFilterOptions((prev) => {
-        const merge = (existing: string[], newVals: (string | null | undefined)[]) => {
-          const set = new Set(existing);
-          for (const v of newVals) { if (v) set.add(v); }
-          return Array.from(set).sort();
-        };
-        return {
-          severity: merge(prev.severity, evts.map((e) => e.severity)),
-          host: merge(prev.host, evts.map((e) => e.host)),
-          program: merge(prev.program, evts.map((e) => e.program)),
-          service: merge(prev.service, evts.map((e) => e.service)),
-          facility: merge(prev.facility, evts.map((e) => e.facility)),
-        };
-      });
-    }).catch(() => { /* ignore — main loadData will show error */ });
+    // Only seed if filters are already active (initial unfiltered loadData covers the initial case)
+    const hasFilters = filterSeverity.length > 0 || filterHost.length > 0 || filterProgram.length > 0 || filterService.length > 0 || filterFacility.length > 0;
+    if (hasFilters) {
+      fetchSystemEvents(system.id, { limit: 200 }).then((evts) => {
+        setFilterOptions((prev) => {
+          const merge = (existing: string[], newVals: (string | null | undefined)[]) => {
+            const set = new Set(existing);
+            for (const v of newVals) { if (v) set.add(v); }
+            return Array.from(set).sort();
+          };
+          return {
+            severity: merge(prev.severity, evts.map((e) => e.severity)),
+            host: merge(prev.host, evts.map((e) => e.host)),
+            program: merge(prev.program, evts.map((e) => e.program)),
+            service: merge(prev.service, evts.map((e) => e.service)),
+            facility: merge(prev.facility, evts.map((e) => e.facility)),
+          };
+        });
+      }).catch(() => { /* ignore — main loadData will show error */ });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [system.id]);
 
@@ -906,8 +912,17 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
 
       {!loading && events.length === 0 && (
         <div className="empty-state">
-          <h3>No events</h3>
-          <p>No events found for this system yet.</p>
+          {(filterSeverity.length > 0 || filterHost.length > 0 || filterProgram.length > 0 || filterService.length > 0 || filterFacility.length > 0) ? (
+            <>
+              <h3>No matching events</h3>
+              <p>No events match the current filters. Try adjusting or clearing the filters.</p>
+            </>
+          ) : (
+            <>
+              <h3>No events</h3>
+              <p>No events found for this system yet.</p>
+            </>
+          )}
         </div>
       )}
     </div>

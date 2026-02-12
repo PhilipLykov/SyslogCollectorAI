@@ -1,7 +1,7 @@
 {
   "name": "logsentinel-ai-dashboard",
   "private": true,
-  "version": "0.8.0",
+  "version": "0.8.1-beta",
   "type": "module",
   "scripts": {
     "dev": "vite",
