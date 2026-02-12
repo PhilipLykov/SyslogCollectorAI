@@ -1,13 +1,18 @@
 import type { Knex } from 'knex';
 import { localTimestamp } from '../../config/index.js';
 import { resolveAiConfig, resolveCustomPrompts } from '../llm/aiConfig.js';
-import { DEFAULT_RAG_SYSTEM_PROMPT } from '../llm/adapter.js';
+import { DEFAULT_RAG_SYSTEM_PROMPT, humanAge } from '../llm/adapter.js';
 
 /**
  * RAG-style natural language query endpoint.
  *
  * Builds context from stored meta summaries, findings, and event snippets.
  * Calls LLM with a RAG-style prompt. Returns a short answer.
+ *
+ * Enhanced to include:
+ *   1. Findings as primary context (compact, high-signal)
+ *   2. Dynamic meta_result limit based on requested time range
+ *   3. Increased response token limit
  *
  * OWASP A03: Sanitize question to reduce prompt injection.
  * Note: Full prompt injection prevention for LLM is an evolving challenge.
@@ -16,6 +21,21 @@ import { DEFAULT_RAG_SYSTEM_PROMPT } from '../llm/adapter.js';
 export interface RagResult {
   answer: string;
   context_used: number;
+}
+
+/** Compute dynamic limit for meta_results based on the requested time range. */
+function computeMetaLimit(from?: string, to?: string): number {
+  if (!from && !to) return 100; // "All time" — generous limit
+
+  const fromMs = from ? new Date(from).getTime() : Date.now() - 365 * 24 * 60 * 60 * 1000;
+  const toMs = to ? new Date(to).getTime() : Date.now();
+  const rangeMs = Math.max(0, toMs - fromMs);
+  const rangeHours = rangeMs / (60 * 60 * 1000);
+
+  if (rangeHours <= 2)  return 24;   // Short: covers full range of 5-min windows
+  if (rangeHours <= 24) return 50;   // Medium
+  if (rangeHours <= 168) return 80;  // Long (up to 7 days)
+  return 100;                         // Very long
 }
 
 export async function askQuestion(
@@ -34,12 +54,90 @@ export async function askQuestion(
   // Sanitize question (A03: limit length, strip control chars)
   const sanitized = question.replace(/[\x00-\x1f]/g, '').slice(0, 500);
 
-  // Build context from recent meta results
+  // ── 1. Query findings (primary context — compact, high-signal) ──
+  let findingsQuery = db('findings')
+    .join('monitored_systems', 'findings.system_id', 'monitored_systems.id')
+    .select(
+      'monitored_systems.name as system_name',
+      'findings.text', 'findings.severity', 'findings.status',
+      'findings.criterion_slug', 'findings.created_at', 'findings.last_seen_at',
+      'findings.occurrence_count', 'findings.reopen_count', 'findings.is_flapping',
+      'findings.resolution_evidence', 'findings.resolved_at',
+    );
+
+  if (options?.systemId) {
+    findingsQuery = findingsQuery.where('findings.system_id', options.systemId);
+  }
+
+  // Include open/acknowledged findings + resolved ones within the time range
+  const fromVal = options?.from;
+  if (fromVal) {
+    findingsQuery = findingsQuery.where(function () {
+      this.whereIn('findings.status', ['open', 'acknowledged'])
+        .orWhere(function () {
+          this.where('findings.status', 'resolved')
+            .where('findings.resolved_at', '>=', fromVal);
+        });
+    });
+  } else {
+    // "All time" — include all open/acknowledged + recently resolved
+    findingsQuery = findingsQuery.where(function () {
+      this.whereIn('findings.status', ['open', 'acknowledged'])
+        .orWhere(function () {
+          this.where('findings.status', 'resolved')
+            .where('findings.resolved_at', '>=', db.raw("NOW() - INTERVAL '30 days'"));
+        });
+    });
+  }
+
+  findingsQuery = findingsQuery
+    .orderByRaw(`
+      CASE findings.status
+        WHEN 'open' THEN 0
+        WHEN 'acknowledged' THEN 1
+        WHEN 'resolved' THEN 2
+      END,
+      CASE findings.severity
+        WHEN 'critical' THEN 0
+        WHEN 'high' THEN 1
+        WHEN 'medium' THEN 2
+        WHEN 'low' THEN 3
+        WHEN 'info' THEN 4
+      END,
+      findings.last_seen_at DESC NULLS LAST
+    `)
+    .limit(50);
+
+  const findingsRows = await findingsQuery;
+
+  const findingsParts = findingsRows.map((f: any) => {
+    const parts: string[] = [];
+    let statusTag = f.status.toUpperCase();
+    if (f.is_flapping) statusTag += '|FLAPPING';
+
+    parts.push(`[${statusTag}] [${f.severity}] ${f.system_name}: ${f.text}`);
+
+    const meta: string[] = [];
+    if (f.created_at) meta.push(`age: ${humanAge(f.created_at)}`);
+    const occ = Number(f.occurrence_count) || 1;
+    if (occ > 1) meta.push(`seen: ${occ} times`);
+    const reopens = Number(f.reopen_count) || 0;
+    if (reopens > 0) meta.push(`reopened: ${reopens} times`);
+    if (f.criterion_slug) meta.push(`criterion: ${f.criterion_slug}`);
+    if (f.resolution_evidence) meta.push(`resolution: ${f.resolution_evidence}`);
+    if (meta.length > 0) parts.push(`  ${meta.join(' | ')}`);
+
+    return parts.join('\n');
+  });
+
+  // ── 2. Query meta_result summaries (secondary context) ──
+  const metaLimit = computeMetaLimit(options?.from, options?.to);
+
   let metaQuery = db('meta_results')
     .join('windows', 'meta_results.window_id', 'windows.id')
     .join('monitored_systems', 'windows.system_id', 'monitored_systems.id')
     .orderBy('meta_results.created_at', 'desc')
-    .limit(20)
+    .limit(metaLimit)
     .select(
       'monitored_systems.name as system_name',
       'windows.from_ts',
@@ -61,7 +159,19 @@ export async function askQuestion(
 
   const metaRows = await metaQuery;
 
-  const contextParts = metaRows.map((r: any) => {
+  // For long time ranges with many windows, sample uniformly
+  let sampledMetaRows = metaRows;
+  const targetSummaries = Math.min(metaLimit, 60); // Cap summaries in the prompt
+  if (metaRows.length > targetSummaries) {
+    // Use (length - 1) / (target - 1) to ensure both first and last rows are included
+    const step = targetSummaries > 1 ? (metaRows.length - 1) / (targetSummaries - 1) : 1;
+    sampledMetaRows = [];
+    for (let i = 0; i < targetSummaries; i++) {
+      sampledMetaRows.push(metaRows[Math.min(Math.floor(i * step), metaRows.length - 1)]);
+    }
+  }
+
+  const summaryParts = sampledMetaRows.map((r: any) => {
     let findings: string[] = [];
     try {
       findings = typeof r.findings === 'string' ? JSON.parse(r.findings) : (r.findings ?? []);
@@ -75,7 +185,22 @@ export async function askQuestion(
     ].filter(Boolean).join('\n');
   });
 
-  const context = contextParts.join('\n---\n');
+  // ── 3. Assemble context ──
+  const contextSections: string[] = [];
+
+  if (findingsParts.length > 0) {
+    contextSections.push('=== TRACKED FINDINGS ===');
+    contextSections.push(findingsParts.join('\n---\n'));
+  }
+
+  if (summaryParts.length > 0) {
+    contextSections.push('');
+    contextSections.push(`=== ANALYSIS SUMMARIES (${sampledMetaRows.length} of ${metaRows.length} windows) ===`);
+    contextSections.push(summaryParts.join('\n---\n'));
+  }
+
+  const context = contextSections.join('\n');
+  const totalContextItems = findingsRows.length + sampledMetaRows.length;
 
   // Resolve custom RAG prompt (if configured by user), fall back to default
   const customPrompts = await resolveCustomPrompts(db);
@@ -99,7 +224,7 @@ export async function askQuestion(
           { role: 'user', content: userContent },
         ],
         temperature: 0.3,
-        max_tokens: 500,
+        max_tokens: 1000,
       }),
     });
   } catch (netErr: any) {
@@ -123,7 +248,10 @@ export async function askQuestion(
   }
   const answer = data.choices?.[0]?.message?.content ?? 'Unable to generate an answer.';
 
-  console.log(`[${localTimestamp()}] RAG query answered (context=${metaRows.length} windows)`);
+  console.log(
+    `[${localTimestamp()}] RAG query answered ` +
+    `(findings=${findingsRows.length}, summaries=${sampledMetaRows.length}/${metaRows.length})`,
+  );
 
-  return { answer, context_used: metaRows.length };
+  return { answer, context_used: totalContextItems };
 }

@@ -14,6 +14,7 @@ import {
   deduplicateFindings,
   computeFingerprint,
   isHigherSeverity,
+  jaccardSimilarity,
   type OpenFinding,
 } from './findingDedup.js';
 import { loadPrivacyFilterConfig, filterMetaEventForLlm } from '../llm/llmPrivacyFilter.js';
@@ -29,21 +30,63 @@ export interface MetaAnalysisConfig {
   finding_dedup_enabled: boolean;
   finding_dedup_threshold: number;
   max_new_findings_per_window: number;
+  /** @deprecated Use severity-tiered auto-resolve settings instead. Kept for backward compat. */
   auto_resolve_after_misses: number;
   severity_decay_enabled: boolean;
   severity_decay_after_occurrences: number;
   max_open_findings_per_system: number;
+  // ── Severity-tiered auto-resolve (consecutive_misses thresholds) ──
+  auto_resolve_critical_days: number;
+  auto_resolve_high_days: number;
+  auto_resolve_medium_days: number;
+  auto_resolve_low_hours: number;
+  auto_resolve_info_hours: number;
+  // ── Flapping detection ──
+  flapping_threshold: number;       // reopens before marking as flapping
+  flapping_lookback_days: number;   // how far back to search for resolved findings
 }
 
 const META_CONFIG_DEFAULTS: MetaAnalysisConfig = {
   finding_dedup_enabled: true,
   finding_dedup_threshold: 0.6,
   max_new_findings_per_window: 5,
-  auto_resolve_after_misses: 5,
+  auto_resolve_after_misses: 0, // Disabled — superseded by severity-tiered settings
   severity_decay_enabled: true,
   severity_decay_after_occurrences: 10,
   max_open_findings_per_system: 25,
+  // Severity-tiered auto-resolve defaults
+  auto_resolve_critical_days: 14,
+  auto_resolve_high_days: 7,
+  auto_resolve_medium_days: 3,
+  auto_resolve_low_hours: 24,
+  auto_resolve_info_hours: 6,
+  // Flapping detection defaults
+  flapping_threshold: 3,
+  flapping_lookback_days: 14,
 };
+
+/** Convert severity-tiered days/hours to consecutive_misses count (5-min windows). */
+function severityAutoResolveMisses(severity: string, cfg: MetaAnalysisConfig): number {
+  switch (severity) {
+    case 'critical': return cfg.auto_resolve_critical_days * 24 * 12;  // days → 5-min windows
+    case 'high':     return cfg.auto_resolve_high_days * 24 * 12;
+    case 'medium':   return cfg.auto_resolve_medium_days * 24 * 12;
+    case 'low':      return cfg.auto_resolve_low_hours * 12;           // hours → 5-min windows
+    case 'info':     return cfg.auto_resolve_info_hours * 12;
+    default:         return cfg.auto_resolve_medium_days * 24 * 12;    // fallback to medium
+  }
+}
+
+/** Escalate severity by one level (for flapping detection). */
+function escalateSeverity(severity: string): string {
+  const escalation: Record<string, string> = {
+    info: 'low',
+    low: 'medium',
+    medium: 'high',
+    high: 'critical',
+  };
+  return escalation[severity] ?? severity;
+}
 
 /** Load meta-analysis config from app_config, with defaults. */
 export async function loadMetaAnalysisConfig(db: Knex): Promise<MetaAnalysisConfig> {
@@ -272,6 +315,93 @@ export async function metaAnalyzeWindow(
   // Track which open findings were matched (seen in this window)
   const matchedOpenIds = new Set(findingsToUpdate.map((u) => u.id));
 
+  // ── Flapping detection: dedup new findings against recently resolved ──
+  // If a new finding matches a recently resolved one, reopen it instead of
+  // creating a duplicate. Track reopen_count for flapping detection.
+  const findingsToReopen: Array<{
+    id: string; newSeverity?: string; reopen_count: number; is_flapping: boolean;
+  }> = [];
+  const remainingToInsert: typeof findingsToInsert = [];
+
+  if (metaCfg.finding_dedup_enabled && findingsToInsert.length > 0) {
+    const lookbackDate = new Date(
+      Date.now() - metaCfg.flapping_lookback_days * 24 * 60 * 60 * 1000,
+    ).toISOString();
+
+    const resolvedRows = await db('findings')
+      .where({ system_id: system.id, status: 'resolved' })
+      .where('resolved_at', '>=', lookbackDate)
+      .orderBy('resolved_at', 'desc')
+      .limit(50)
+      .select('id', 'text', 'severity', 'criterion_slug', 'fingerprint',
+              'reopen_count', 'is_flapping');
+
+    // Track already-matched resolved IDs to prevent two new findings from
+    // reopening the same resolved finding (which would silently drop one).
+    const matchedResolvedIds = new Set<string>();
+
+    for (const finding of findingsToInsert) {
+      let matched = false;
+
+      if (resolvedRows.length > 0) {
+        const fp = computeFingerprint(finding.text);
+
+        // Try fingerprint exact match first
+        const fpMatch = resolvedRows.find(
+          (rf: any) => rf.fingerprint === fp &&
+            !matchedResolvedIds.has(rf.id) &&
+            criterionMatchSimple(finding.criterion, rf.criterion_slug),
+        );
+
+        if (fpMatch) {
+          const newReopenCount = (Number(fpMatch.reopen_count) || 0) + 1;
+          const isFlapping = newReopenCount >= metaCfg.flapping_threshold;
+          findingsToReopen.push({
+            id: fpMatch.id,
+            newSeverity: isHigherSeverity(finding.severity, fpMatch.severity) ? finding.severity
+              : isFlapping ? escalateSeverity(fpMatch.severity) : undefined,
+            reopen_count: newReopenCount,
+            is_flapping: isFlapping || Boolean(fpMatch.is_flapping),
+          });
+          matchedResolvedIds.add(fpMatch.id);
+          matched = true;
+        }
+
+        // If no fingerprint match, try Jaccard similarity
+        if (!matched) {
+          for (const rf of resolvedRows) {
+            if (matchedResolvedIds.has(rf.id)) continue;
+            if (!criterionMatchSimple(finding.criterion, rf.criterion_slug)) continue;
+            const sim = jaccardSimilarity(finding.text, rf.text);
+            if (sim >= metaCfg.finding_dedup_threshold) {
+              const newReopenCount = (Number(rf.reopen_count) || 0) + 1;
+              const isFlapping = newReopenCount >= metaCfg.flapping_threshold;
+              findingsToReopen.push({
+                id: rf.id,
+                newSeverity: isHigherSeverity(finding.severity, rf.severity) ? finding.severity
+                  : isFlapping ? escalateSeverity(rf.severity) : undefined,
+                reopen_count: newReopenCount,
+                is_flapping: isFlapping || Boolean(rf.is_flapping),
+              });
+              matchedResolvedIds.add(rf.id);
+              matched = true;
+              break;
+            }
+          }
+        }
+      }
+
+      if (!matched) {
+        remainingToInsert.push(finding);
+      }
+    }
+  } else {
+    remainingToInsert.push(...findingsToInsert);
+  }
+
+  // Replace findingsToInsert with the remaining ones after flapping dedup
+  findingsToInsert = remainingToInsert;
+
   // ── Persist everything in a transaction ─────────────────
   await db.transaction(async (trx) => {
     // Store meta_result (findings field kept for backward compat / fallback display)
@@ -318,72 +448,123 @@ export async function metaAnalyzeWindow(
         updateFields.severity = update.escalateSeverity;
       }
       await trx('findings')
-        .where({ id: update.id, status: 'open' })
+        .where({ id: update.id })
+        .whereIn('status', ['open', 'acknowledged'])
         .update(updateFields);
     }
 
-    // ── Mark LLM-resolved findings ────────────────────────
+    // ── Reopen resolved findings (flapping detection) ────
+    for (const reopen of findingsToReopen) {
+      const updateFields: Record<string, any> = {
+        status: 'open',
+        resolved_at: null,
+        resolved_by_meta_id: null,
+        resolution_evidence: null,
+        last_seen_at: nowIso,
+        consecutive_misses: 0,
+        occurrence_count: trx.raw('occurrence_count + 1'),
+        reopen_count: reopen.reopen_count,
+        is_flapping: reopen.is_flapping,
+      };
+      if (reopen.newSeverity) {
+        updateFields.severity = reopen.newSeverity;
+      }
+      await trx('findings')
+        .where({ id: reopen.id, status: 'resolved' })
+        .update(updateFields);
+
+      if (reopen.is_flapping) {
+        console.log(
+          `[${localTimestamp()}] Flapping detected: finding ${reopen.id} ` +
+          `reopened ${reopen.reopen_count} times (threshold: ${metaCfg.flapping_threshold})`,
+        );
+      }
+    }
+
+    // ── Mark LLM-resolved findings (with resolution evidence) ──
     if (result.resolvedFindingIndices.length > 0 && context.openFindings.length > 0) {
-      const resolvedNow = new Date().toISOString();
-      for (const idx of result.resolvedFindingIndices) {
-        const openFinding = context.openFindings.find((f) => f.index === idx);
+      for (const resolvedEntry of result.resolvedFindings) {
+        const openFinding = context.openFindings.find((f) => f.index === resolvedEntry.index);
         if (!openFinding) continue;
-        const dbId = (openFinding as any)._dbId;
+        const dbId = openFinding._dbId;
         if (!dbId) continue;
         await trx('findings')
-          .where({ id: dbId, status: 'open' })
+          .where({ id: dbId })
+          .whereIn('status', ['open', 'acknowledged'])
           .update({
             status: 'resolved',
-            resolved_at: resolvedNow,
+            resolved_at: nowIso,
             resolved_by_meta_id: metaId,
+            resolution_evidence: resolvedEntry.evidence ?? null,
           });
       }
     }
 
     // ── Increment consecutive_misses for unmatched findings ─
-    // Open findings that were NOT matched by any new finding AND
-    // NOT resolved by the LLM in this window have "missed" a window.
-    const resolvedIds = new Set<string>();
+    // ALL open/acknowledged findings for this system that were NOT matched by
+    // dedup, NOT reopened, and NOT resolved by the LLM have "missed" a window.
+    // Uses a system-wide query (no limit) so findings beyond the LLM context
+    // cap (30) are still tracked and can eventually be auto-resolved.
+    const excludeFromMissIds = new Set<string>(matchedOpenIds);
+    // Add LLM-resolved finding IDs to the exclusion set
     if (result.resolvedFindingIndices.length > 0 && context.openFindings.length > 0) {
       for (const idx of result.resolvedFindingIndices) {
-        const of = context.openFindings.find((f) => f.index === idx);
-        if (of) resolvedIds.add((of as any)._dbId);
+        const openF = context.openFindings.find((f) => f.index === idx);
+        if (openF) excludeFromMissIds.add(openF._dbId);
       }
     }
-    const unmatchedOpenIds: string[] = [];
-    for (const of of context.openFindings) {
-      const dbId = (of as any)._dbId;
-      if (dbId && !matchedOpenIds.has(dbId) && !resolvedIds.has(dbId)) {
-        unmatchedOpenIds.push(dbId);
-      }
-    }
-    if (unmatchedOpenIds.length > 0) {
-      await trx('findings')
-        .whereIn('id', unmatchedOpenIds)
-        .where({ status: 'open' })
-        .update({
-          consecutive_misses: trx.raw('consecutive_misses + 1'),
-        });
+    // Add newly inserted finding IDs (they start at consecutive_misses=0)
+    // and reopened finding IDs (they were reset to consecutive_misses=0)
+    for (const reopen of findingsToReopen) {
+      excludeFromMissIds.add(reopen.id);
     }
 
-    // ── Auto-resolve stale findings ───────────────────────
-    if (metaCfg.auto_resolve_after_misses > 0) {
+    // Increment consecutive_misses for all other open/acknowledged findings
+    const missIncrementQuery = trx('findings')
+      .where({ system_id: system.id })
+      .whereIn('status', ['open', 'acknowledged']);
+    if (excludeFromMissIds.size > 0) {
+      missIncrementQuery.whereNotIn('id', Array.from(excludeFromMissIds));
+    }
+    await missIncrementQuery.update({
+      consecutive_misses: trx.raw('consecutive_misses + 1'),
+    });
+
+    // ── Auto-resolve stale findings (severity-tiered) ─────
+    // Each severity level has its own threshold (in consecutive_misses).
+    // E.g. critical findings persist for 14 days, info for 6 hours.
+    {
       const staleFindings = await trx('findings')
-        .where({ system_id: system.id, status: 'open' })
-        .where('consecutive_misses', '>=', metaCfg.auto_resolve_after_misses)
-        .select('id');
-      if (staleFindings.length > 0) {
-        const staleIds = staleFindings.map((f: any) => f.id);
-        await trx('findings')
-          .whereIn('id', staleIds)
-          .update({
-            status: 'resolved',
-            resolved_at: nowIso,
-            resolved_by_meta_id: metaId,
-          });
+        .where({ system_id: system.id })
+        .whereIn('status', ['open', 'acknowledged'])
+        .select('id', 'severity', 'consecutive_misses');
+
+      const toAutoResolve: string[] = [];
+      for (const f of staleFindings) {
+        const threshold = severityAutoResolveMisses(f.severity, metaCfg);
+        if (threshold > 0 && Number(f.consecutive_misses) >= threshold) {
+          toAutoResolve.push(f.id);
+        }
+      }
+
+      if (toAutoResolve.length > 0) {
+        for (const findingId of toAutoResolve) {
+          const finding = staleFindings.find((f: any) => f.id === findingId);
+          const threshold = finding ? severityAutoResolveMisses(finding.severity, metaCfg) : 0;
+          const windowCount = Number(finding?.consecutive_misses ?? threshold);
+          const timespan = `${Math.round(windowCount * 5 / 60)} hours`;
+          await trx('findings')
+            .where({ id: findingId })
+            .update({
+              status: 'resolved',
+              resolved_at: nowIso,
+              resolved_by_meta_id: metaId,
+              resolution_evidence: `Auto-resolved: not detected for ${windowCount} consecutive analysis windows (~${timespan})`,
+            });
+        }
         console.log(
-          `[${localTimestamp()}] Auto-resolved ${staleIds.length} stale finding(s) ` +
-          `(>= ${metaCfg.auto_resolve_after_misses} consecutive misses)`,
+          `[${localTimestamp()}] Auto-resolved ${toAutoResolve.length} stale finding(s) ` +
+          `(severity-tiered thresholds)`,
         );
       }
     }
@@ -445,6 +626,7 @@ export async function metaAnalyzeWindow(
               status: 'resolved',
               resolved_at: nowIso,
               resolved_by_meta_id: metaId,
+              resolution_evidence: `Auto-resolved: evicted due to open findings cap (max=${metaCfg.max_open_findings_per_system})`,
             });
           console.log(
             `[${localTimestamp()}] Evicted ${evictIds.length} finding(s) ` +
@@ -498,6 +680,7 @@ export async function metaAnalyzeWindow(
     `${events.length} events, ${eventsForLlm.length} templates, ` +
     `LLM returned ${result.findings.length} findings → ` +
     `${findingsToInsert.length} new, ${findingsToUpdate.length} dedup-merged, ` +
+    `${findingsToReopen.length} reopened, ` +
     `${result.resolvedFindingIndices.length} LLM-resolved, ` +
     `tokens=${usage.token_input + usage.token_output}`,
   );
@@ -515,6 +698,8 @@ async function buildMetaContext(
 ): Promise<MetaAnalysisContext & {
   openFindings: Array<{
     index: number; text: string; severity: string; criterion?: string;
+    status?: string; created_at?: string; last_seen_at?: string;
+    occurrence_count?: number; reopen_count?: number; is_flapping?: boolean;
     _dbId: string; _fingerprint?: string; _occurrence_count: number; _consecutive_misses: number;
   }>;
 }> {
@@ -532,19 +717,29 @@ async function buildMetaContext(
     summary: m.summary,
   }));
 
-  // 2. Currently open findings for this system (not acknowledged, not resolved)
+  // 2. Currently open AND acknowledged findings for this system.
+  // Including acknowledged findings prevents the LLM from creating duplicate
+  // findings for issues that an operator has already seen.
   const openRows = await db('findings')
-    .where({ system_id: systemId, status: 'open' })
+    .where({ system_id: systemId })
+    .whereIn('status', ['open', 'acknowledged'])
     .orderBy('created_at', 'desc')
     .limit(30) // Cap to avoid huge prompts
     .select('id', 'text', 'severity', 'criterion_slug', 'fingerprint',
-            'occurrence_count', 'consecutive_misses');
+            'occurrence_count', 'consecutive_misses', 'status',
+            'created_at', 'last_seen_at', 'reopen_count', 'is_flapping');
 
   const openFindings = openRows.map((f: any, i: number) => ({
     index: i,
     text: f.text,
     severity: f.severity,
     criterion: f.criterion_slug ?? undefined,
+    status: f.status,
+    created_at: f.created_at ?? undefined,
+    last_seen_at: f.last_seen_at ?? undefined,
+    occurrence_count: Number(f.occurrence_count) || 1,
+    reopen_count: Number(f.reopen_count) || 0,
+    is_flapping: Boolean(f.is_flapping),
     _dbId: f.id, // internal: used to resolve by DB ID later
     _fingerprint: f.fingerprint ?? undefined,
     _occurrence_count: Number(f.occurrence_count) || 1,
@@ -552,6 +747,12 @@ async function buildMetaContext(
   }));
 
   return { previousSummaries, openFindings };
+}
+
+/** Check if two criteria match (null matches anything). */
+function criterionMatchSimple(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return true;
+  return a === b;
 }
 
 /** Format a timestamp concisely for the LLM context. */

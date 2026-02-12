@@ -558,10 +558,13 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
             <div className="findings-list-new">
               {displayedFindings.map((f) => {
                 const occurrences = Number(f.occurrence_count) || 1;
+                const reopens = Number(f.reopen_count) || 0;
+                // Robust check: PostgreSQL boolean may arrive as true, 't', or 1 over JSON
+                const isFlapping = f.is_flapping === true || (f.is_flapping as unknown) === 't' || (f.is_flapping as unknown) === 1;
                 const hasDecay = f.original_severity && f.original_severity !== f.severity;
                 const showLastSeen = occurrences > 1 && f.last_seen_at;
                 return (
-                  <div key={f.id} className={`finding-card finding-status-${f.status}`}>
+                  <div key={f.id} className={`finding-card finding-status-${f.status}${isFlapping ? ' finding-flapping' : ''}`}>
                     <div className="finding-card-top">
                       <span className={`finding-severity finding-severity-${f.severity}`}>
                         {hasDecay && (
@@ -571,12 +574,28 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
                         )}
                         {f.severity}
                       </span>
+                      {isFlapping && (
+                        <span
+                          className="finding-flapping-badge"
+                          title={`This issue keeps recurring — resolved and reopened ${reopens} times. The oscillation pattern itself may indicate an unresolved root cause.`}
+                        >
+                          FLAPPING
+                        </span>
+                      )}
                       {occurrences > 1 && (
                         <span
                           className="finding-occurrence-badge"
                           title={`Detected ${occurrences} times across analysis windows`}
                         >
                           &times;{occurrences}
+                        </span>
+                      )}
+                      {reopens > 0 && !isFlapping && (
+                        <span
+                          className="finding-reopen-badge"
+                          title={`Reopened ${reopens} time${reopens !== 1 ? 's' : ''} after being resolved`}
+                        >
+                          Reopened {reopens}&times;
                         </span>
                       )}
                       {f.criterion_slug && (
@@ -594,6 +613,12 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
                       </span>
                     </div>
                     <p className="finding-text">{f.text}</p>
+                    {/* Resolution evidence for resolved findings */}
+                    {f.status === 'resolved' && f.resolution_evidence && (
+                      <p className="finding-resolution-evidence" title="Evidence for resolution">
+                        Resolution: {f.resolution_evidence}
+                      </p>
+                    )}
                     <div className="finding-card-actions">
                       {f.status === 'open' && hasPermission(currentUser ?? null, 'events:acknowledge') && (
                         <button

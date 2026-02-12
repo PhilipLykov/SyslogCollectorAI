@@ -102,7 +102,8 @@ export function normalizeEntry(entry: IngestEntry): NormalizedEvent | null {
     }
   }
 
-  // Final normalization: convert numbers to names, lowercase strings.
+  // Final normalization: convert numbers to names, lowercase strings,
+  // and map aliases (err→error, warn→warning, etc.) to canonical forms.
   // Also handle numeric strings like "7" (common with rsyslog omhttp / Fluent Bit).
   if (typeof severity === 'number') {
     severity = syslogSeverityToString(severity);
@@ -115,7 +116,8 @@ export function normalizeEntry(entry: IngestEntry): NormalizedEvent | null {
       const num = Number(trimmed);
       severity = (num >= 0 && num <= 7) ? syslogSeverityToString(num) : trimmed;
     } else {
-      severity = trimmed;
+      // Map aliases to canonical names (RFC 5424 preferred forms)
+      severity = SEVERITY_CANONICAL[trimmed] ?? trimmed;
     }
   } else {
     severity = undefined;
@@ -195,6 +197,22 @@ export function computeNormalizedHash(event: NormalizedEvent): string {
   return createHash('sha256').update(parts.join('\0')).digest('hex');
 }
 
+// ── Severity alias → canonical name mapping ──────────────────
+// Maps common syslog severity aliases and application-level names
+// to their canonical RFC 5424 forms. Applied during final normalization.
+const SEVERITY_CANONICAL: Record<string, string> = {
+  err:           'error',       // BSD syslog (RFC 3164)
+  warn:          'warning',     // Common application shorthand
+  crit:          'critical',    // BSD syslog (RFC 3164)
+  emerg:         'emergency',   // BSD syslog (RFC 3164)
+  informational: 'info',        // RFC 5424 long form
+  information:   'info',        // .NET / Windows Event Log
+  fatal:         'critical',    // Application-level (Java, Node.js, etc.)
+  panic:         'emergency',   // Linux kernel / Go runtime
+  trace:         'debug',       // Application-level (OpenTelemetry, etc.)
+  verbose:       'debug',       // Application-level (.NET, NLog, etc.)
+};
+
 // ── helpers ──────────────────────────────────────────────────
 
 function stringField(entry: Record<string, unknown>, ...keys: string[]): string | undefined {
@@ -259,13 +277,13 @@ function otelSeverityNumberToString(n: number): string {
  * Severity priority (lower = more severe).  Matches RFC 5424.
  */
 const SEVERITY_PRIORITY: Record<string, number> = {
-  emergency: 0, emerg: 0,
+  emergency: 0,
   alert: 1,
-  critical: 2, crit: 2,
-  error: 3, err: 3,
-  warning: 4, warn: 4,
+  critical: 2,
+  error: 3,
+  warning: 4,
   notice: 5,
-  info: 6, informational: 6,
+  info: 6,
   debug: 7,
 };
 

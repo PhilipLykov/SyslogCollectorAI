@@ -436,6 +436,10 @@ export interface Finding {
   occurrence_count: number;
   original_severity: string | null;
   consecutive_misses: number;
+  // Lifecycle fields (from migration 022)
+  resolution_evidence: string | null;
+  reopen_count: number;
+  is_flapping: boolean;
 }
 
 export async function fetchFindings(
