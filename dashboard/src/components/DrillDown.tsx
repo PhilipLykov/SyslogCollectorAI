@@ -61,7 +61,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
 
   // ── "Mark as Normal Behavior" modal state ───────────────
   const [markOkModal, setMarkOkModal] = useState<{
-    eventId: string;
+    eventId?: string;
     message: string;
     systemId?: string;
   } | null>(null);
@@ -413,19 +413,22 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
   }, [system.id, system.name]);
 
   // ── Mark as Normal Behavior ────────────────────────────
-  const openMarkOkModal = useCallback(async (eventId: string, message: string, systemId?: string) => {
-    setMarkOkModal({ eventId, message, systemId });
+  const openMarkOkModal = useCallback(async (eventIdOrUndef: string | undefined, message: string, systemId?: string) => {
+    setMarkOkModal({ eventId: eventIdOrUndef, message, systemId });
     setMarkOkPreview(null);
     setMarkOkPattern('');
     setMarkOkError('');
     setMarkOkSuccess('');
     setMarkOkLoading(true);
     try {
-      const preview = await previewNormalBehavior({ event_id: eventId });
+      // Use event_id when available (individual events), fall back to message (group rows)
+      const preview = eventIdOrUndef
+        ? await previewNormalBehavior({ event_id: eventIdOrUndef })
+        : await previewNormalBehavior({ message });
       setMarkOkPreview(preview);
       setMarkOkPattern(preview.suggested_pattern);
     } catch (err: unknown) {
-      // Fallback: use message directly
+      // Fallback: try message-based preview
       try {
         const preview = await previewNormalBehavior({ message });
         setMarkOkPreview(preview);
@@ -447,6 +450,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
         event_id: markOkModal.eventId,
         system_id: markOkModal.systemId ?? system.id,
         pattern: markOkPattern.trim(),
+        message: !markOkModal.eventId ? markOkModal.message : undefined,
       });
       setMarkOkSuccess('Template created. Future matching events will be treated as normal behavior.');
       setTimeout(() => {
@@ -645,6 +649,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
                       <th>Hosts</th>
                       <th>Program</th>
                       <th>Message</th>
+                      {hasPermission(currentUser ?? null, 'events:acknowledge') && <th style={{ width: '80px' }}>Actions</th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -697,13 +702,24 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
                             <td>{grp.hosts.length > 0 ? grp.hosts.join(', ') : '—'}</td>
                             <td>{grp.program ?? '—'}</td>
                             <td className="criterion-message-cell">{grp.message}</td>
+                            {hasPermission(currentUser ?? null, 'events:acknowledge') && (
+                              <td className="criterion-actions-cell">
+                                <button
+                                  className="btn btn-xs btn-mark-ok"
+                                  onClick={(ev) => { ev.stopPropagation(); openMarkOkModal(undefined, grp.message, system.id); }}
+                                  title="Mark this event pattern as normal behavior"
+                                >
+                                  Mark OK
+                                </button>
+                              </td>
+                            )}
                           </tr>
 
                           {/* Expanded detail rows */}
                           {isExpanded && (
                             expandedGroupLoading ? (
                               <tr className="criterion-detail-loading-row">
-                                <td colSpan={8}>
+                                <td colSpan={hasPermission(currentUser ?? null, 'events:acknowledge') ? 9 : 8}>
                                   <div className="settings-loading"><div className="spinner" /> Loading events…</div>
                                 </td>
                               </tr>
@@ -726,6 +742,17 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
                                   <td>{ev.host ?? '—'}</td>
                                   <td>{ev.program ?? '—'}</td>
                                   <td className="criterion-message-cell">{ev.message}</td>
+                                  {hasPermission(currentUser ?? null, 'events:acknowledge') && (
+                                    <td className="criterion-actions-cell">
+                                      <button
+                                        className="btn btn-xs btn-mark-ok"
+                                        onClick={() => openMarkOkModal(ev.event_id, ev.message, system.id)}
+                                        title="Mark this event pattern as normal behavior"
+                                      >
+                                        Mark OK
+                                      </button>
+                                    </td>
+                                  )}
                                 </tr>
                               ))
                             )

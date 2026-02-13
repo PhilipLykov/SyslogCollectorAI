@@ -616,6 +616,15 @@ input:focus-visible,
   word-break: break-word;
 }
 
+.criterion-actions-cell {
+  white-space: nowrap;
+  text-align: center;
+}
+.criterion-actions-cell .btn-mark-ok {
+  font-size: 0.72rem;
+  padding: 2px 8px;
+}
+
 /* ── Grouped criterion table ──────────────────────────── */
 
 .criterion-grouped-table th:first-child {
