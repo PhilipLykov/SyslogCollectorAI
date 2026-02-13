@@ -584,15 +584,16 @@ export async function metaAnalyzeWindow(
         // If every referenced event's message is substantially similar to the
         // finding's own text, the LLM is resolving the finding with the same
         // problem — not a counter-event. This is always invalid.
-        const findingTextLower = openFinding.text.toLowerCase();
-        const findingWords = new Set(findingTextLower.split(/\s+/).filter((w) => w.length > 3));
+        const stripPunctuation = (s: string) => s.replace(/[^a-z0-9\s]/g, '');
+        const findingTextClean = stripPunctuation(openFinding.text.toLowerCase());
+        const findingWords = new Set(findingTextClean.split(/\s+/).filter((w) => w.length > 3));
         let allSelfReferential = true;
         for (const ref of eventRefs) {
-          const refMessage = (eventIndexToMessage.get(ref) ?? '').toLowerCase();
+          const refMessage = stripPunctuation((eventIndexToMessage.get(ref) ?? '').toLowerCase());
           if (!refMessage) continue;
           const refWords = new Set(refMessage.split(/\s+/).filter((w) => w.length > 3));
-          // Jaccard-like overlap: if >60% of the finding's words appear in the
-          // event message, the event describes the same problem, not a resolution.
+          // One-directional overlap: if ≥50% of the finding's significant words
+          // appear in the event message, the event describes the same problem.
           let overlap = 0;
           for (const w of findingWords) {
             if (refWords.has(w)) overlap++;
