@@ -258,7 +258,7 @@ Return ONLY valid JSON with the "scores" array.`;
  */
 export function buildScoringPrompt(criterionOverrides?: Partial<Record<string, string>>): string {
   const guidelines: string[] = [];
-  for (const slug of ['it_security', 'performance_degradation', 'failure_prediction', 'anomaly', 'compliance_audit', 'operational_risk']) {
+  for (const slug of CRITERIA_SLUGS) {
     const guide = criterionOverrides?.[slug] ?? DEFAULT_CRITERION_GUIDELINES[slug] ?? '';
     guidelines.push(`=== ${slug} ===\n${guide}`);
   }
@@ -439,11 +439,15 @@ export class OpenAiAdapter implements LlmAdapter {
 
     const userContent = sections.join('\n');
     const prompt = options?.systemPrompt ?? DEFAULT_SCORE_SYSTEM_PROMPT;
-    const response = await this.chatCompletion(prompt, userContent);
 
     let scores: ScoreResult[];
+    let usage: LlmUsageInfo;
     try {
-      const parsed = JSON.parse(response.content);
+      const response = await this.chatCompletion(prompt, userContent);
+      usage = response.usage;
+
+      const jsonContent = extractJson(response.content);
+      const parsed = JSON.parse(jsonContent);
       // Handle both {"scores": [...]} and direct array (if provider doesn't use json_object)
       const rawScores = Array.isArray(parsed)
         ? parsed
@@ -452,18 +456,21 @@ export class OpenAiAdapter implements LlmAdapter {
           : [parsed];
       scores = rawScores.map(normalizeScoreResult);
 
-      // Pad scores array if LLM returned fewer than expected
+      // Pad/truncate scores array to match event count
       while (scores.length < events.length) {
         scores.push(emptyScoreResult());
       }
+      if (scores.length > events.length) {
+        scores = scores.slice(0, events.length);
+      }
     } catch (err) {
-      console.error(`[${localTimestamp()}] Failed to parse LLM score response:`, err);
-      console.error(`[${localTimestamp()}] Raw response: ${response.content.slice(0, 500)}`);
-      // Return zero scores rather than crash
+      console.error(`[${localTimestamp()}] LLM scoring failed:`, err);
+      // Return zero scores rather than crash the pipeline
       scores = events.map(() => emptyScoreResult());
+      usage = { model: this.model, token_input: 0, token_output: 0, request_count: 1 };
     }
 
-    return { scores, usage: response.usage };
+    return { scores, usage };
   }
 
   async metaAnalyze(
@@ -553,7 +560,8 @@ export class OpenAiAdapter implements LlmAdapter {
     const response = await this.chatCompletion(prompt, userContent);
 
     try {
-      const parsed = JSON.parse(response.content);
+      const jsonContent = extractJson(response.content);
+      const parsed = JSON.parse(jsonContent);
 
       const metaScores: MetaScores = {
         it_security: clamp(parsed.meta_scores?.it_security ?? 0),
@@ -687,8 +695,24 @@ export class OpenAiAdapter implements LlmAdapter {
 // ── Helpers ──────────────────────────────────────────────────
 
 function clamp(v: unknown): number {
-  const n = typeof v === 'number' ? v : 0;
+  const n = typeof v === 'number' && !Number.isNaN(v) ? v : 0;
   return Math.max(0, Math.min(1, n));
+}
+
+/**
+ * Extract JSON from an LLM response that may be wrapped in markdown code fences.
+ * Many non-OpenAI providers (Ollama, LM Studio, vLLM) ignore response_format
+ * and wrap JSON output in ```json ... ``` blocks.
+ */
+function extractJson(raw: string): string {
+  const trimmed = raw.trim();
+  // Match ```json ... ``` or ``` ... ``` (with optional language tag)
+  const match = trimmed.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?\s*```$/);
+  if (match) return match[1].trim();
+  // Also handle partial fences (opening ``` without closing, or just the content)
+  const startFence = trimmed.match(/^```(?:json)?\s*\n([\s\S]*)$/);
+  if (startFence) return startFence[1].trim();
+  return trimmed;
 }
 
 /** Normalize a raw LLM score object: ensure all 6 fields exist, clamp 0-1. */

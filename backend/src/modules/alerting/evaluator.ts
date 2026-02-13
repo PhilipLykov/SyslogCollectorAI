@@ -4,8 +4,30 @@ import { localTimestamp } from '../../config/index.js';
 import { sendNotification, type AlertPayload } from './channels.js';
 import { CRITERIA } from '../../types/index.js';
 
-/** Dashboard base URL — used to build deep-links in notification payloads. */
-const DASHBOARD_URL = process.env.DASHBOARD_URL ?? '';
+/** Dashboard base URL — used to build deep-links in notification payloads.
+ *  Validated at startup: must be http/https or empty. */
+const RAW_DASHBOARD_URL = (process.env.DASHBOARD_URL ?? '').trim();
+const DASHBOARD_URL = RAW_DASHBOARD_URL && /^https?:\/\//i.test(RAW_DASHBOARD_URL)
+  ? RAW_DASHBOARD_URL.replace(/\/+$/, '') // strip trailing slashes
+  : '';
+
+if (RAW_DASHBOARD_URL && !DASHBOARD_URL) {
+  console.warn(
+    `[${localTimestamp()}] DASHBOARD_URL="${RAW_DASHBOARD_URL}" is not a valid http/https URL — deep-links in notifications will be disabled.`,
+  );
+}
+
+/** Build a dashboard deep-link for a system, safely handling existing query params. */
+function buildDashboardLink(systemId: string): string | undefined {
+  if (!DASHBOARD_URL) return undefined;
+  try {
+    const url = new URL(DASHBOARD_URL);
+    url.searchParams.set('system', systemId);
+    return url.toString();
+  } catch {
+    return `${DASHBOARD_URL}?system=${systemId}`;
+  }
+}
 
 /**
  * Alert evaluation loop.
@@ -28,6 +50,9 @@ export async function evaluateAlerts(db: Knex, windowId: string): Promise<number
   }
 
   let sent = 0;
+
+  // Pre-fetch active silences once to avoid N+1 queries per firing pair
+  const activeSilences = await loadActiveSilences(db);
 
   const rules = await db('notification_rules')
     .where('notification_rules.enabled', true)
@@ -81,7 +106,7 @@ export async function evaluateAlerts(db: Knex, windowId: string): Promise<number
       // Process firings
       for (const pair of firingPairs) {
         // Check silence
-        if (await isSilenced(db, rule.id, pair.system_id)) continue;
+        if (checkSilenced(activeSilences, rule.id, pair.system_id)) continue;
 
         // Check last alert state
         const lastAlert = await db('alert_history')
@@ -107,14 +132,14 @@ export async function evaluateAlerts(db: Knex, windowId: string): Promise<number
         const severity = scoreSeverity(pair.effective_value);
 
         const scorePct = (pair.effective_value * 100).toFixed(0);
-        const thresholdPct = (triggerConfig.min_score * 100).toFixed(0);
+        const thresholdPct = (minScore * 100).toFixed(0);
 
         const payload: AlertPayload = {
           title: `[${severity.toUpperCase()}] ${criterion?.name ?? 'Score'} alert — ${system?.name ?? 'Unknown'}`,
           body: `${criterion?.name ?? 'Score'} score reached ${scorePct}% (threshold: ${thresholdPct}%) for system "${system?.name ?? 'Unknown'}".`,
           severity,
           variant: 'firing',
-          link: DASHBOARD_URL ? `${DASHBOARD_URL}?system=${pair.system_id}` : undefined,
+          link: buildDashboardLink(pair.system_id),
           system_name: system?.name,
           criterion: criterion?.name,
         };
@@ -169,19 +194,19 @@ export async function evaluateAlerts(db: Knex, windowId: string): Promise<number
           // Only send resolution if the last state was 'firing'
           if (lastState?.state !== 'firing') continue;
 
-          if (await isSilenced(db, rule.id, prev.system_id)) continue;
+          if (checkSilenced(activeSilences, rule.id, prev.system_id)) continue;
 
           const system = await db('monitored_systems').where({ id: prev.system_id }).first();
           const criterion = CRITERIA.find((c) => c.id === Number(prev.criterion_id));
 
-          const thresholdPct = (triggerConfig.min_score * 100).toFixed(0);
+          const thresholdPct = (minScore * 100).toFixed(0);
 
           const payload: AlertPayload = {
             title: `[RESOLVED] ${criterion?.name ?? 'Score'} — ${system?.name ?? 'Unknown'}`,
             body: `${criterion?.name ?? 'Score'} score has dropped below ${thresholdPct}% threshold for system "${system?.name ?? 'Unknown'}". Situation appears to have improved.`,
             severity: 'resolved',
             variant: 'resolved',
-            link: DASHBOARD_URL ? `${DASHBOARD_URL}?system=${prev.system_id}` : undefined,
+            link: buildDashboardLink(prev.system_id),
             system_name: system?.name,
             criterion: criterion?.name,
           };
@@ -217,30 +242,39 @@ export async function evaluateAlerts(db: Knex, windowId: string): Promise<number
   return sent;
 }
 
-/** Check if a rule+system pair is currently silenced. */
-async function isSilenced(db: Knex, ruleId: string, systemId: string): Promise<boolean> {
-  const now = new Date().toISOString();
+/** Pre-parsed silence with scope extracted once. */
+interface ParsedSilence {
+  id: string;
+  scope: { global?: boolean; system_ids?: string[]; rule_ids?: string[] };
+}
 
-  const silences = await db('silences')
+/** Load all currently active silences once (called at start of evaluation cycle). */
+async function loadActiveSilences(db: Knex): Promise<ParsedSilence[]> {
+  const now = new Date().toISOString();
+  const rows = await db('silences')
     .where({ enabled: true })
     .where('starts_at', '<=', now)
     .where('ends_at', '>', now); // Exclusive end (silence expires AT ends_at, not after)
 
-  for (const silence of silences) {
-    let scope: any;
+  const result: ParsedSilence[] = [];
+  for (const silence of rows) {
     try {
-      scope = typeof silence.scope === 'string' ? JSON.parse(silence.scope) : silence.scope;
+      const scope = typeof silence.scope === 'string' ? JSON.parse(silence.scope) : silence.scope;
+      result.push({ id: silence.id, scope });
     } catch {
-      // Skip corrupted silence rather than aborting all rule evaluation
       console.error(`[${localTimestamp()}] Skipping silence ${silence.id}: corrupted scope JSON`);
-      continue;
     }
-
-    if (scope.global) return true;
-    if (scope.system_ids?.includes(systemId)) return true;
-    if (scope.rule_ids?.includes(ruleId)) return true;
   }
+  return result;
+}
 
+/** Synchronous check against pre-fetched silences (no DB hit per call). */
+function checkSilenced(silences: ParsedSilence[], ruleId: string, systemId: string): boolean {
+  for (const s of silences) {
+    if (s.scope.global) return true;
+    if (s.scope.system_ids?.includes(systemId)) return true;
+    if (s.scope.rule_ids?.includes(ruleId)) return true;
+  }
   return false;
 }
 

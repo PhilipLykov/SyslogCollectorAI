@@ -128,6 +128,13 @@ export async function metaAnalyzeWindow(
   const window = await db('windows').where({ id: windowId }).first();
   if (!window) throw new Error(`Window ${windowId} not found`);
 
+  // Idempotency guard: skip if this window has already been analyzed
+  const existingMeta = await db('meta_results').where({ window_id: windowId }).first();
+  if (existingMeta) {
+    console.log(`[${localTimestamp()}] Meta-analyze: window ${windowId} already has a meta_result (${existingMeta.id}), skipping duplicate run.`);
+    return;
+  }
+
   const system = await db('monitored_systems').where({ id: window.system_id }).first();
   if (!system) throw new Error(`System ${window.system_id} not found`);
 
@@ -300,13 +307,36 @@ export async function metaAnalyzeWindow(
   const context = await buildMetaContext(db, system.id, windowId, contextWindowSize);
 
   // ── Call LLM for meta-analysis ──────────────────────────
-  const { result, usage } = await llm.metaAnalyze(
-    eventsForLlm,
-    system.description ?? '',
-    sourceLabels,
-    context,
-    { systemPrompt: customPrompts.metaSystemPrompt },
-  );
+  let result: Awaited<ReturnType<typeof llm.metaAnalyze>>['result'];
+  let usage: Awaited<ReturnType<typeof llm.metaAnalyze>>['usage'];
+  try {
+    ({ result, usage } = await llm.metaAnalyze(
+      eventsForLlm,
+      system.description ?? '',
+      sourceLabels,
+      context,
+      { systemPrompt: customPrompts.metaSystemPrompt },
+    ));
+  } catch (err) {
+    console.error(
+      `[${localTimestamp()}] LLM meta-analysis failed for window ${windowId} ` +
+      `(system=${system.name}): ${err instanceof Error ? err.message : err}`,
+    );
+    // Write zero effective scores so the dashboard reflects this window consistently
+    const nowIso = new Date().toISOString();
+    for (const criterion of CRITERIA) {
+      await db.raw(`
+        INSERT INTO effective_scores (window_id, system_id, criterion_id, effective_value, meta_score, max_event_score, updated_at)
+        VALUES (?, ?, ?, 0, 0, 0, ?)
+        ON CONFLICT (window_id, system_id, criterion_id)
+        DO UPDATE SET effective_value = 0,
+                      meta_score = 0,
+                      max_event_score = 0,
+                      updated_at = EXCLUDED.updated_at
+      `, [windowId, system.id, criterion.id, nowIso]);
+    }
+    return;
+  }
 
   // ── Finding deduplication (post-LLM safety net) ─────────
   // Build OpenFinding[] from context for dedup module
