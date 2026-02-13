@@ -149,8 +149,9 @@ export function matchesNormalBehavior(
   eventSystemId?: string,
 ): NormalBehaviorTemplate | null {
   for (const t of compiledTemplates) {
-    // System-specific templates only apply to events from the same system
-    if (t.system_id && eventSystemId && t.system_id !== eventSystemId) {
+    // System-specific templates only apply to events from the same system.
+    // If the event has no system_id, skip all system-specific templates.
+    if (t.system_id && t.system_id !== eventSystemId) {
       continue;
     }
     if (t._compiledRegex.test(message)) {

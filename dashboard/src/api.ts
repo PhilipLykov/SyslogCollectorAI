@@ -1691,7 +1691,7 @@ export async function fetchNormalBehaviorTemplates(
 
 export async function updateNormalBehaviorTemplate(
   id: string,
-  updates: { pattern?: string; enabled?: boolean; notes?: string; system_id?: string | null },
+  updates: { pattern?: string; enabled?: boolean; notes?: string | null; system_id?: string | null },
 ): Promise<NormalBehaviorTemplate> {
   return apiFetch(`/api/v1/normal-behavior-templates/${id}`, {
     method: 'PUT',
