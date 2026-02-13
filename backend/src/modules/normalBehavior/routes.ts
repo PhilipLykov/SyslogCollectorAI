@@ -30,9 +30,10 @@ async function retroactivelyApplyTemplate(
 ): Promise<{ zeroedEvents: number; updatedWindows: number }> {
   const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
-  // 1. Zero out event_scores for matching events (PostgreSQL ~* = case-insensitive regex)
+  // 1. Zero out event_scores for matching events (PostgreSQL ~* = case-insensitive regex).
+  // Cast events.id (UUID) to text — event_scores.event_id is VARCHAR(255).
   const subquery = db('events')
-    .select('id')
+    .select(db.raw('id::text'))
     .where('timestamp', '>=', since24h)
     .whereRaw('message ~* ?', [patternRegex]);
 
@@ -74,8 +75,9 @@ async function retroactivelyApplyTemplate(
       // Recalculate max_event_score from event_scores within this window.
       // Use a subquery (not JOIN) for the partitioned events table — more
       // reliable and allows PostgreSQL to prune partitions efficiently.
+      // Cast events.id (UUID) to text — event_scores.event_id is VARCHAR(255).
       const windowEventIds = db('events')
-        .select('id')
+        .select(db.raw('id::text'))
         .where('system_id', w.system_id)
         .where('timestamp', '>=', w.from_ts)
         .where('timestamp', '<=', w.to_ts);

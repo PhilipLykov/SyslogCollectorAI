@@ -17,6 +17,8 @@ import {
   acknowledgeEvents,
   previewNormalBehavior,
   createNormalBehaviorTemplate,
+  fetchNormalBehaviorTemplates,
+  type NormalBehaviorTemplate,
   type NormalBehaviorPreview,
 } from '../api';
 import { ScoreBars, CRITERIA_LABELS } from './ScoreBar';
@@ -72,6 +74,38 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
   const [markOkLoading, setMarkOkLoading] = useState(false);
   const [markOkError, setMarkOkError] = useState('');
   const [markOkSuccess, setMarkOkSuccess] = useState('');
+
+  // ── Normal behavior templates (for hiding "Mark OK" on already-matched events) ──
+  const [normalTemplates, setNormalTemplates] = useState<NormalBehaviorTemplate[]>([]);
+  const normalRegexes = useRef<Array<{ regex: RegExp; id: string }>>([]);
+
+  // Build compiled regexes when templates change
+  useEffect(() => {
+    const compiled: Array<{ regex: RegExp; id: string }> = [];
+    for (const t of normalTemplates) {
+      if (!t.enabled) continue;
+      try {
+        compiled.push({ regex: new RegExp(t.pattern_regex, 'i'), id: t.id });
+      } catch { /* skip invalid regex */ }
+    }
+    normalRegexes.current = compiled;
+  }, [normalTemplates]);
+
+  const loadNormalTemplates = useCallback(() => {
+    fetchNormalBehaviorTemplates({ system_id: system.id, enabled: 'true' })
+      .then(setNormalTemplates)
+      .catch(() => { /* ignore — Mark OK visibility is best-effort */ });
+  }, [system.id]);
+
+  useEffect(() => { loadNormalTemplates(); }, [loadNormalTemplates]);
+
+  /** Check if a message matches any active normal-behavior template. */
+  const isNormalBehavior = useCallback((message: string): boolean => {
+    for (const entry of normalRegexes.current) {
+      if (entry.regex.test(message)) return true;
+    }
+    return false;
+  }, []);
 
   // ── Event filter state (multi-select) ───────────────────
   const [filterSeverity, setFilterSeverity] = useState<string[]>([]);
@@ -454,11 +488,14 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
         pattern: markOkPattern.trim(),
         message: !markOkModal.eventId ? markOkModal.message : undefined,
       });
-      setMarkOkSuccess('Scores recalculated. Future matching events will be treated as normal behavior.');
+      setMarkOkSuccess('Template created. Scores recalculated. Future matching events will be treated as normal behavior.');
       setTimeout(() => {
         setMarkOkModal(null);
         setMarkOkSuccess('');
       }, 2500);
+
+      // Reload normal-behavior templates so the "Mark OK" button hides for matching events
+      loadNormalTemplates();
 
       // Refresh criterion drill-down data (event scores are now zeroed for matching events)
       if (selectedCriterion) {
@@ -486,7 +523,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
     } finally {
       setMarkOkLoading(false);
     }
-  }, [markOkModal, markOkPattern, system.id, selectedCriterion, onRefreshSystem]);
+  }, [markOkModal, markOkPattern, system.id, selectedCriterion, onRefreshSystem, loadNormalTemplates]);
 
   // ── Compute filtered findings ───────────────────────────
   const openFindings = findings.filter((f) => f.status === 'open');
@@ -726,13 +763,17 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
                             <td className="criterion-message-cell">{grp.message}</td>
                             {hasPermission(currentUser ?? null, 'events:acknowledge') && (
                               <td className="criterion-actions-cell">
-                                <button
-                                  className="btn btn-xs btn-mark-ok"
-                                  onClick={(ev) => { ev.stopPropagation(); openMarkOkModal(undefined, grp.message, system.id); }}
-                                  title="Mark this event pattern as normal behavior"
-                                >
-                                  Mark OK
-                                </button>
+                                {isNormalBehavior(grp.message) ? (
+                                  <span className="mark-ok-done" title="Already marked as normal behavior">✓ Normal</span>
+                                ) : (
+                                  <button
+                                    className="btn btn-xs btn-mark-ok"
+                                    onClick={(ev) => { ev.stopPropagation(); openMarkOkModal(undefined, grp.message, system.id); }}
+                                    title="Mark this event pattern as normal behavior"
+                                  >
+                                    Mark OK
+                                  </button>
+                                )}
                               </td>
                             )}
                           </tr>
@@ -766,13 +807,17 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
                                   <td className="criterion-message-cell">{ev.message}</td>
                                   {hasPermission(currentUser ?? null, 'events:acknowledge') && (
                                     <td className="criterion-actions-cell">
-                                      <button
-                                        className="btn btn-xs btn-mark-ok"
-                                        onClick={() => openMarkOkModal(ev.event_id, ev.message, system.id)}
-                                        title="Mark this event pattern as normal behavior"
-                                      >
-                                        Mark OK
-                                      </button>
+                                      {isNormalBehavior(ev.message) ? (
+                                        <span className="mark-ok-done" title="Already marked as normal behavior">✓ Normal</span>
+                                      ) : (
+                                        <button
+                                          className="btn btn-xs btn-mark-ok"
+                                          onClick={() => openMarkOkModal(ev.event_id, ev.message, system.id)}
+                                          title="Mark this event pattern as normal behavior"
+                                        >
+                                          Mark OK
+                                        </button>
+                                      )}
                                     </td>
                                   )}
                                 </tr>
@@ -1183,13 +1228,17 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
                               {copiedId === e.id ? 'Copied!' : 'Copy Event'}
                             </button>
                             {hasPermission(currentUser ?? null, 'events:acknowledge') && (
-                              <button
-                                className="btn btn-sm btn-mark-ok"
-                                onClick={(ev) => { ev.stopPropagation(); openMarkOkModal(e.id, e.message, system.id); }}
-                                title="Mark this event pattern as normal behavior — future similar events will be ignored by AI"
-                              >
-                                Mark OK
-                              </button>
+                              isNormalBehavior(e.message) ? (
+                                <span className="mark-ok-done" title="Already marked as normal behavior">✓ Normal</span>
+                              ) : (
+                                <button
+                                  className="btn btn-sm btn-mark-ok"
+                                  onClick={(ev) => { ev.stopPropagation(); openMarkOkModal(e.id, e.message, system.id); }}
+                                  title="Mark this event pattern as normal behavior — future similar events will be ignored by AI"
+                                >
+                                  Mark OK
+                                </button>
+                              )
                             )}
                           </div>
                         </div>

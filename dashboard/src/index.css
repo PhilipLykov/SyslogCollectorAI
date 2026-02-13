@@ -624,6 +624,12 @@ input:focus-visible,
   font-size: 0.72rem;
   padding: 2px 8px;
 }
+.mark-ok-done {
+  font-size: 0.72rem;
+  color: var(--green, #4caf50);
+  font-weight: 500;
+  opacity: 0.8;
+}
 
 /* ── Grouped criterion table ──────────────────────────── */
 
