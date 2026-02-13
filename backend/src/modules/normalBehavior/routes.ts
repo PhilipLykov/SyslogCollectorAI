@@ -71,14 +71,19 @@ async function retroactivelyApplyTemplate(
 
       if (!existing) continue;
 
-      // Recalculate max_event_score from event_scores within this window
+      // Recalculate max_event_score from event_scores within this window.
+      // Use a subquery (not JOIN) for the partitioned events table — more
+      // reliable and allows PostgreSQL to prune partitions efficiently.
+      const windowEventIds = db('events')
+        .select('id')
+        .where('system_id', w.system_id)
+        .where('timestamp', '>=', w.from_ts)
+        .where('timestamp', '<=', w.to_ts);
+
       const maxRow = await db('event_scores')
-        .join('events', 'event_scores.event_id', 'events.id')
-        .where('events.system_id', w.system_id)
-        .where('events.timestamp', '>=', w.from_ts)
-        .where('events.timestamp', '<=', w.to_ts)
-        .where('event_scores.criterion_id', criterion.id)
-        .max('event_scores.score as max_score')
+        .whereIn('event_id', windowEventIds)
+        .where('criterion_id', criterion.id)
+        .max('score as max_score')
         .first();
 
       const newMaxEvent = Number(maxRow?.max_score ?? 0);
@@ -241,8 +246,15 @@ export async function registerNormalBehaviorRoutes(app: FastifyInstance): Promis
       );
 
       // Retroactively zero scores for matching events and recalculate effective scores.
-      // This ensures the dashboard reflects the change immediately.
-      const retroResult = await retroactivelyApplyTemplate(db, patternRegex, systemId);
+      // This is best-effort: template creation always succeeds even if retroactive update fails.
+      let retroResult = { zeroedEvents: 0, updatedWindows: 0 };
+      try {
+        retroResult = await retroactivelyApplyTemplate(db, patternRegex, systemId);
+      } catch (err) {
+        console.error(
+          `[${localTimestamp()}] Retroactive score update failed (template ${id} still created): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
 
       return reply.code(201).send({
         ...created,
