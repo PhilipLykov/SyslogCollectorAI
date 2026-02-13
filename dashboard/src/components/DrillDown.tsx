@@ -4,11 +4,13 @@ import {
   type LogEvent,
   type MetaResult,
   type EventScoreRecord,
+  type GroupedEventScoreRecord,
   type Finding,
   CRITERIA,
   fetchSystemEvents,
   fetchSystemMeta,
-  fetchEventScores,
+  fetchGroupedEventScores,
+  fetchGroupedEventDetails,
   fetchFindings,
   acknowledgeFinding,
   reopenFinding,
@@ -38,11 +40,15 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
 
-  // Criterion drill-down state
+  // Criterion drill-down state (grouped view)
   const [selectedCriterion, setSelectedCriterion] = useState<string | null>(null);
-  const [criterionEvents, setCriterionEvents] = useState<EventScoreRecord[]>([]);
+  const [criterionGroups, setCriterionGroups] = useState<GroupedEventScoreRecord[]>([]);
   const [criterionLoading, setCriterionLoading] = useState(false);
   const [criterionError, setCriterionError] = useState('');
+  // Expanded group: tracks which group_key is expanded + its loaded events
+  const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
+  const [expandedGroupEvents, setExpandedGroupEvents] = useState<EventScoreRecord[]>([]);
+  const [expandedGroupLoading, setExpandedGroupLoading] = useState(false);
 
   // Findings state
   const [findings, setFindings] = useState<Finding[]>([]);
@@ -227,16 +233,20 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
     }
   };
 
-  // ── Criterion click handler ─────────────────────────────
+  // ── Criterion click handler (grouped view) ─────────────
   const handleCriterionClick = useCallback(async (slug: string) => {
     if (selectedCriterion === slug) {
       setSelectedCriterion(null);
-      setCriterionEvents([]);
+      setCriterionGroups([]);
+      setExpandedGroup(null);
+      setExpandedGroupEvents([]);
       return;
     }
 
     setSelectedCriterion(slug);
-    setCriterionEvents([]); // Clear stale events from previous criterion
+    setCriterionGroups([]);
+    setExpandedGroup(null);
+    setExpandedGroupEvents([]);
     setCriterionLoading(true);
     setCriterionError('');
 
@@ -248,12 +258,12 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
     }
 
     try {
-      const data = await fetchEventScores(system.id, {
+      const data = await fetchGroupedEventScores(system.id, {
         criterion_id: criterion.id,
-        limit: 50,
-        min_score: 0.001, // only events that actually scored > 0 for this criterion
+        limit: 30,
+        min_score: 0.001,
       });
-      setCriterionEvents(data);
+      setCriterionGroups(data);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('Authentication')) {
@@ -265,6 +275,39 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
       setCriterionLoading(false);
     }
   }, [selectedCriterion, system.id]);
+
+  // ── Expand a grouped row to show individual events ─────
+  const handleExpandGroup = useCallback(async (groupKey: string) => {
+    if (expandedGroup === groupKey) {
+      setExpandedGroup(null);
+      setExpandedGroupEvents([]);
+      return;
+    }
+
+    setExpandedGroup(groupKey);
+    setExpandedGroupEvents([]);
+    setExpandedGroupLoading(true);
+
+    const criterion = CRITERIA.find((c) => c.slug === selectedCriterion);
+
+    try {
+      const data = await fetchGroupedEventDetails(system.id, groupKey, {
+        criterion_id: criterion?.id,
+        limit: 100,
+      });
+      setExpandedGroupEvents(data);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('Authentication')) {
+        onAuthErrorRef.current();
+        return;
+      }
+      // Silently fail — the user can click again
+      console.error('Failed to load group detail:', msg);
+    } finally {
+      setExpandedGroupLoading(false);
+    }
+  }, [expandedGroup, selectedCriterion, system.id]);
 
   // ── Finding acknowledge / reopen ────────────────────────
   const handleAcknowledge = useCallback(async (findingId: string) => {
@@ -431,7 +474,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
               </h4>
               <button
                 className="btn btn-xs btn-outline"
-                onClick={() => { setSelectedCriterion(null); setCriterionEvents([]); }}
+                onClick={() => { setSelectedCriterion(null); setCriterionGroups([]); setExpandedGroup(null); setExpandedGroupEvents([]); }}
               >
                 Close
               </button>
@@ -462,7 +505,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
             )}
             {criterionError && <div className="error-msg" role="alert">{criterionError}</div>}
 
-            {!criterionLoading && !criterionError && criterionEvents.length === 0 && (
+            {!criterionLoading && !criterionError && criterionGroups.length === 0 && (
               <div className="criterion-drilldown-empty">
                 {effectivePct > 0 && metaPct > 0 && maxEventPct === 0 ? (
                   <>
@@ -479,54 +522,117 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
               </div>
             )}
 
-            {!criterionLoading && criterionEvents.length > 0 && (
+            {!criterionLoading && criterionGroups.length > 0 && (
               <div className="table-responsive">
-                <table className="criterion-events-table" aria-label={`Events scored for ${criterionLabel}`}>
+                <table className="criterion-events-table criterion-grouped-table" aria-label={`Event patterns scored for ${criterionLabel}`}>
                   <thead>
                     <tr>
+                      <th style={{ width: '32px' }}></th>
                       <th>Score</th>
+                      <th>Count</th>
                       <th>Severity</th>
-                      <th>Time</th>
-                      <th>Host</th>
-                      <th>Source IP</th>
+                      <th>Time Range</th>
+                      <th>Hosts</th>
                       <th>Program</th>
                       <th>Message</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {criterionEvents.map((ev, idx) => {
-                      const score = Number(ev.score) || 0;
+                    {criterionGroups.map((grp) => {
+                      const score = Number(grp.score) || 0;
                       const pct = Math.round(score * 100);
+                      const isExpanded = expandedGroup === grp.group_key;
+                      const hasMultiple = grp.occurrence_count > 1;
                       return (
-                        <tr key={`${ev.event_id}-${idx}`} className="criterion-event-row">
-                          <td className="criterion-score-cell">
-                            <span
-                              className="criterion-score-badge"
-                              style={{ color: scoreColorFromValue(score) }}
-                            >
-                              {pct}%
-                            </span>
-                          </td>
-                          <td>
-                            {ev.severity && (
-                              <span className={`severity-badge ${ev.severity.toLowerCase()}`}>
-                                {ev.severity}
+                        <Fragment key={grp.group_key}>
+                          <tr
+                            className={`criterion-event-row criterion-group-row${isExpanded ? ' criterion-group-expanded' : ''}${hasMultiple ? ' criterion-group-clickable' : ''}`}
+                            onClick={hasMultiple ? () => handleExpandGroup(grp.group_key) : undefined}
+                            style={hasMultiple ? { cursor: 'pointer' } : undefined}
+                            title={hasMultiple ? (isExpanded ? 'Click to collapse' : `Click to see all ${grp.occurrence_count} events`) : undefined}
+                          >
+                            <td className="criterion-expand-cell">
+                              {hasMultiple && (
+                                <span className={`criterion-expand-icon${isExpanded ? ' expanded' : ''}`}>&#9656;</span>
+                              )}
+                            </td>
+                            <td className="criterion-score-cell">
+                              <span
+                                className="criterion-score-badge"
+                                style={{ color: scoreColorFromValue(score) }}
+                              >
+                                {pct}%
                               </span>
-                            )}
-                          </td>
-                          <td style={{ whiteSpace: 'nowrap' }}>{safeDate(ev.timestamp)}</td>
-                          <td>{ev.host ?? '—'}</td>
-                          <td>{ev.source_ip ?? '—'}</td>
-                          <td>{ev.program ?? '—'}</td>
-                          <td className="criterion-message-cell">{ev.message}</td>
-                        </tr>
+                            </td>
+                            <td className="criterion-count-cell">
+                              {hasMultiple ? (
+                                <span className="criterion-count-badge">&times;{grp.occurrence_count}</span>
+                              ) : (
+                                <span className="criterion-count-single">1</span>
+                              )}
+                            </td>
+                            <td>
+                              {grp.severity && (
+                                <span className={`severity-badge ${grp.severity.toLowerCase()}`}>
+                                  {grp.severity}
+                                </span>
+                              )}
+                            </td>
+                            <td style={{ whiteSpace: 'nowrap' }}>
+                              {grp.first_seen === grp.last_seen
+                                ? safeDate(grp.first_seen)
+                                : `${safeDate(grp.first_seen)} — ${safeDate(grp.last_seen)}`
+                              }
+                            </td>
+                            <td>{grp.hosts.length > 0 ? grp.hosts.join(', ') : '—'}</td>
+                            <td>{grp.program ?? '—'}</td>
+                            <td className="criterion-message-cell">{grp.message}</td>
+                          </tr>
+
+                          {/* Expanded detail rows */}
+                          {isExpanded && (
+                            expandedGroupLoading ? (
+                              <tr className="criterion-detail-loading-row">
+                                <td colSpan={8}>
+                                  <div className="settings-loading"><div className="spinner" /> Loading events…</div>
+                                </td>
+                              </tr>
+                            ) : (
+                              expandedGroupEvents.map((ev, idx) => (
+                                <tr key={`${ev.event_id}-${idx}`} className="criterion-event-row criterion-detail-row">
+                                  <td></td>
+                                  <td className="criterion-score-cell">
+                                    <span className="criterion-score-badge" style={{ color: scoreColorFromValue(Number(ev.score) || 0) }}>
+                                      {Math.round((Number(ev.score) || 0) * 100)}%
+                                    </span>
+                                  </td>
+                                  <td></td>
+                                  <td>
+                                    {ev.severity && (
+                                      <span className={`severity-badge ${ev.severity.toLowerCase()}`}>{ev.severity}</span>
+                                    )}
+                                  </td>
+                                  <td style={{ whiteSpace: 'nowrap' }}>{safeDate(ev.timestamp)}</td>
+                                  <td>{ev.host ?? '—'}</td>
+                                  <td>{ev.program ?? '—'}</td>
+                                  <td className="criterion-message-cell">{ev.message}</td>
+                                </tr>
+                              ))
+                            )
+                          )}
+                        </Fragment>
                       );
                     })}
                   </tbody>
                 </table>
-                {criterionEvents.length >= 50 && (
-                  <p className="truncation-notice">Showing the top 50 events by score.</p>
-                )}
+                {(() => {
+                  const totalEvents = criterionGroups.reduce((sum, g) => sum + g.occurrence_count, 0);
+                  return (
+                    <p className="truncation-notice">
+                      {criterionGroups.length} unique pattern{criterionGroups.length !== 1 ? 's' : ''} across {totalEvents} total event{totalEvents !== 1 ? 's' : ''}.
+                    </p>
+                  );
+                })()}
               </div>
             )}
           </div>

@@ -863,6 +863,46 @@ export async function fetchEventScores(
   return apiFetch(`/api/v1/systems/${systemId}/event-scores?${params}`);
 }
 
+/** A grouped row — one entry per unique event pattern (template). */
+export interface GroupedEventScoreRecord {
+  group_key: string;
+  message: string;
+  severity: string | null;
+  program: string | null;
+  criterion_slug: string;
+  criterion_name: string;
+  score: number;
+  severity_label: string | null;
+  reason_codes: string[] | null;
+  occurrence_count: number;
+  first_seen: string;
+  last_seen: string;
+  hosts: string[];
+  source_ips: string[];
+}
+
+export async function fetchGroupedEventScores(
+  systemId: string,
+  opts?: { criterion_id?: number; limit?: number; min_score?: number },
+): Promise<GroupedEventScoreRecord[]> {
+  const params = new URLSearchParams();
+  if (opts?.criterion_id) params.set('criterion_id', String(opts.criterion_id));
+  if (opts?.limit) params.set('limit', String(opts.limit));
+  if (opts?.min_score !== undefined) params.set('min_score', String(opts.min_score));
+  return apiFetch(`/api/v1/systems/${systemId}/event-scores/grouped?${params}`);
+}
+
+export async function fetchGroupedEventDetails(
+  systemId: string,
+  groupKey: string,
+  opts?: { criterion_id?: number; limit?: number },
+): Promise<EventScoreRecord[]> {
+  const params = new URLSearchParams();
+  if (opts?.criterion_id) params.set('criterion_id', String(opts.criterion_id));
+  if (opts?.limit) params.set('limit', String(opts.limit));
+  return apiFetch(`/api/v1/systems/${systemId}/event-scores/grouped/${encodeURIComponent(groupKey)}/events?${params}`);
+}
+
 // ── Scoring Criteria (static, matches backend CRITERIA) ──────
 
 export const CRITERIA = [

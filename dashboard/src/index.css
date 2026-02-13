@@ -554,6 +554,78 @@ input:focus-visible,
   word-break: break-word;
 }
 
+/* ── Grouped criterion table ──────────────────────────── */
+
+.criterion-grouped-table th:first-child {
+  width: 32px;
+  padding-right: 0;
+}
+
+.criterion-expand-cell {
+  text-align: center;
+  width: 32px;
+  padding-right: 0 !important;
+}
+
+.criterion-expand-icon {
+  display: inline-block;
+  font-size: 0.85rem;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+
+.criterion-expand-icon.expanded {
+  transform: rotate(90deg);
+}
+
+.criterion-group-clickable:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.criterion-group-expanded {
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom-color: transparent;
+}
+
+.criterion-count-cell {
+  text-align: center;
+  white-space: nowrap;
+}
+
+.criterion-count-badge {
+  display: inline-block;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.78rem;
+  padding: 2px 7px;
+  border-radius: 10px;
+  min-width: 28px;
+  text-align: center;
+}
+
+.criterion-count-single {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.criterion-detail-row {
+  background: rgba(255, 255, 255, 0.015);
+  border-left: 3px solid var(--accent);
+}
+
+.criterion-detail-row td {
+  padding-top: 5px;
+  padding-bottom: 5px;
+  font-size: 0.84rem;
+  color: var(--text-secondary, #aab);
+}
+
+.criterion-detail-loading-row td {
+  padding: 12px;
+  text-align: center;
+}
+
 /* ── Meta Analysis Summary (DrillDown) ───────────────── */
 
 .meta-summary {

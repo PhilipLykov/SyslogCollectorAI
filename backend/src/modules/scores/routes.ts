@@ -236,6 +236,169 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
     },
   );
 
+  // ── Grouped event scores (by template) for a system ──────────
+  //    Returns unique event patterns with occurrence counts, time ranges,
+  //    and affected hosts.  Used by the criterion drill-down to avoid
+  //    showing a wall of duplicate events.
+  app.get<{
+    Params: { systemId: string };
+    Querystring: { criterion_id?: string; limit?: string; min_score?: string };
+  }>(
+    '/api/v1/systems/:systemId/event-scores/grouped',
+    { preHandler: requireAuth(PERMISSIONS.EVENTS_VIEW) },
+    async (request, reply) => {
+      const { systemId } = request.params;
+      const criterionId = request.query.criterion_id;
+      const rawLimit = Number(request.query.limit ?? 30);
+      const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(1, rawLimit), 100) : 30;
+      const minScore = Number(request.query.min_score ?? 0);
+
+      const system = await db('monitored_systems').where({ id: systemId }).first();
+      if (!system) return reply.code(404).send({ error: 'System not found' });
+
+      const isEsBacked = system.event_source === 'elasticsearch';
+
+      if (isEsBacked) {
+        // For ES-backed systems, fall back to the ungrouped endpoint behaviour
+        // (grouping requires template_id which is a PG-only column).
+        return reply.redirect(
+          `/api/v1/systems/${systemId}/event-scores?` +
+          `criterion_id=${criterionId ?? ''}&limit=${limit}&min_score=${minScore}`,
+        );
+      }
+
+      // PG-backed system: group by template_id (or by event_id for singleton events)
+      const groupQuery = db('event_scores')
+        .joinRaw('JOIN events ON event_scores.event_id = events.id::text')
+        .join('criteria', 'event_scores.criterion_id', 'criteria.id')
+        .where('events.system_id', systemId)
+        .where('event_scores.score_type', 'event')
+        .groupByRaw(`
+          COALESCE(events.template_id::text, events.id::text),
+          events.message,
+          events.severity,
+          events.program,
+          criteria.slug,
+          criteria.name,
+          event_scores.score,
+          event_scores.severity_label,
+          event_scores.reason_codes
+        `)
+        .orderBy('event_scores.score', 'desc')
+        .limit(limit)
+        .select(
+          db.raw(`COALESCE(events.template_id::text, events.id::text) as group_key`),
+          'events.message',
+          'events.severity',
+          'events.program',
+          'criteria.slug as criterion_slug',
+          'criteria.name as criterion_name',
+          'event_scores.score',
+          'event_scores.severity_label',
+          'event_scores.reason_codes',
+          db.raw('COUNT(*)::int as occurrence_count'),
+          db.raw('MIN(events.timestamp) as first_seen'),
+          db.raw('MAX(events.timestamp) as last_seen'),
+          db.raw(`ARRAY_AGG(DISTINCT events.host) FILTER (WHERE events.host IS NOT NULL) as hosts`),
+          db.raw(`ARRAY_AGG(DISTINCT events.source_ip) FILTER (WHERE events.source_ip IS NOT NULL) as source_ips`),
+        );
+
+      if (criterionId) {
+        groupQuery.where('event_scores.criterion_id', Number(criterionId));
+      }
+      if (minScore > 0) {
+        groupQuery.where('event_scores.score', '>=', minScore);
+      }
+
+      const rows = await groupQuery;
+
+      // Parse reason_codes JSON safely
+      const results = rows.map((r: any) => {
+        let reasons = r.reason_codes;
+        if (typeof reasons === 'string') {
+          try { reasons = JSON.parse(reasons); } catch { /* keep as string */ }
+        }
+        return {
+          group_key: r.group_key,
+          message: r.message,
+          severity: r.severity,
+          program: r.program,
+          criterion_slug: r.criterion_slug,
+          criterion_name: r.criterion_name,
+          score: r.score,
+          severity_label: r.severity_label,
+          reason_codes: reasons,
+          occurrence_count: Number(r.occurrence_count) || 1,
+          first_seen: r.first_seen,
+          last_seen: r.last_seen,
+          hosts: Array.isArray(r.hosts) ? r.hosts.filter(Boolean) : [],
+          source_ips: Array.isArray(r.source_ips) ? r.source_ips.filter(Boolean) : [],
+        };
+      });
+
+      return reply.send(results);
+    },
+  );
+
+  // ── Individual events for a group (expand a grouped row) ─────
+  //    Returns all individual events within a template group for a criterion.
+  app.get<{
+    Params: { systemId: string; groupKey: string };
+    Querystring: { criterion_id?: string; limit?: string };
+  }>(
+    '/api/v1/systems/:systemId/event-scores/grouped/:groupKey/events',
+    { preHandler: requireAuth(PERMISSIONS.EVENTS_VIEW) },
+    async (request, reply) => {
+      const { systemId, groupKey } = request.params;
+      const criterionId = request.query.criterion_id;
+      const rawLimit = Number(request.query.limit ?? 100);
+      const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(1, rawLimit), 500) : 100;
+
+      // groupKey is either a template_id (UUID) or an event id (for singletons)
+      let query = db('event_scores')
+        .joinRaw('JOIN events ON event_scores.event_id = events.id::text')
+        .join('criteria', 'event_scores.criterion_id', 'criteria.id')
+        .where('events.system_id', systemId)
+        .where('event_scores.score_type', 'event')
+        .where(function () {
+          this.whereRaw('events.template_id::text = ?', [groupKey])
+            .orWhereRaw('events.id::text = ?', [groupKey]);
+        })
+        .orderBy('events.timestamp', 'desc')
+        .limit(limit)
+        .select(
+          'events.id as event_id',
+          'events.timestamp',
+          'events.message',
+          'events.severity',
+          'events.host',
+          'events.source_ip',
+          'events.program',
+          'criteria.slug as criterion_slug',
+          'criteria.name as criterion_name',
+          'event_scores.score',
+          'event_scores.severity_label',
+          'event_scores.reason_codes',
+        );
+
+      if (criterionId) {
+        query = query.where('event_scores.criterion_id', Number(criterionId));
+      }
+
+      const rows = await query;
+
+      const results = rows.map((r: any) => {
+        let reasons = r.reason_codes;
+        if (typeof reasons === 'string') {
+          try { reasons = JSON.parse(reasons); } catch { /* keep as string */ }
+        }
+        return { ...r, reason_codes: reasons };
+      });
+
+      return reply.send(results);
+    },
+  );
+
   // ── Meta result for a window ───────────────────────────────
   app.get<{ Params: { windowId: string } }>(
     '/api/v1/windows/:windowId/meta',
