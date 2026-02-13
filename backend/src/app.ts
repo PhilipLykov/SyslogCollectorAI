@@ -32,8 +32,10 @@ export async function buildApp(): Promise<FastifyInstance> {
             options: { translateTime: 'SYS:standard', ignore: 'pid,hostname' },
           },
         },
-    // A03: reject payloads over 1 MB to prevent abuse
-    bodyLimit: 1_048_576,
+    // A03: reject overly large payloads to prevent abuse.
+    // 10 MB accommodates Fluent Bit and rsyslog batches that buffer
+    // hundreds of events per flush while still preventing unbounded abuse.
+    bodyLimit: 10_485_760,
   });
 
   // ── Security plugins (A05: secure headers, CORS) ──────────

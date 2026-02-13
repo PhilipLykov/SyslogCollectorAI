@@ -101,7 +101,9 @@ services:
       - ./fluent-bit/docker-enrich.lua:/fluent-bit/etc/docker-enrich.lua:ro
       # Docker container logs (json-file driver) — tailed by FB tail input.
       # Requires Docker daemon to use json-file log driver (the default).
-      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      # If Docker's data-root is non-default, set DOCKER_DATA_ROOT in .env.
+      # Find it with: docker info | grep "Docker Root Dir"
+      - ${DOCKER_DATA_ROOT:-/var/lib/docker}/containers:/var/lib/docker/containers:ro
       # Persistent offset DB so Fluent Bit resumes from the correct
       # position after restarts (avoids replaying old logs).
       - fluent-bit-db:/fluent-bit/tail-db
