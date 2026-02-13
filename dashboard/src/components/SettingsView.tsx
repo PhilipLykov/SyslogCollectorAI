@@ -25,6 +25,7 @@ import { AuditLogSection } from './AuditLogSection';
 import { RoleManagementSection } from './RoleManagementSection';
 import { ElasticsearchSettings } from './ElasticsearchSettings';
 import { NormalBehaviorPanel } from './NormalBehaviorPanel';
+import { DashboardConfigSection } from './DashboardConfigSection';
 import { hasPermission } from '../App';
 
 interface SettingsViewProps {
@@ -32,7 +33,7 @@ interface SettingsViewProps {
   currentUser?: CurrentUser | null;
 }
 
-type SettingsTab = 'systems' | 'ai-model' | 'notifications' | 'normal-behavior' | 'database' | 'elasticsearch' | 'privacy' | 'users' | 'roles' | 'api-keys' | 'audit-log';
+type SettingsTab = 'systems' | 'ai-model' | 'dashboard' | 'notifications' | 'normal-behavior' | 'database' | 'elasticsearch' | 'privacy' | 'users' | 'roles' | 'api-keys' | 'audit-log';
 
 type Modal =
   | { kind: 'create-system' }
@@ -265,6 +266,16 @@ export function SettingsView({ onAuthError, currentUser }: SettingsViewProps) {
             AI Model
           </button>
         )}
+        {hasPermission(currentUser ?? null, 'ai_config:view') && (
+          <button
+            className={`settings-tab${activeTab === 'dashboard' ? ' active' : ''}`}
+            onClick={() => setActiveTab('dashboard')}
+            role="tab"
+            aria-selected={activeTab === 'dashboard'}
+          >
+            Dashboard
+          </button>
+        )}
         {hasPermission(currentUser ?? null, 'notifications:view') && (
           <button
             className={`settings-tab${activeTab === 'notifications' ? ' active' : ''}`}
@@ -360,6 +371,8 @@ export function SettingsView({ onAuthError, currentUser }: SettingsViewProps) {
       {/* ── Tab content ── */}
       {activeTab === 'ai-model' ? (
         <AiConfigSection onAuthError={onAuthError} />
+      ) : activeTab === 'dashboard' ? (
+        <DashboardConfigSection onAuthError={onAuthError} />
       ) : activeTab === 'notifications' ? (
         <NotificationsSection onAuthError={onAuthError} />
       ) : activeTab === 'database' ? (

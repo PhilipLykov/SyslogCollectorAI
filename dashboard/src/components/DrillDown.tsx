@@ -21,6 +21,7 @@ import {
   reEvaluateSystem,
   type NormalBehaviorTemplate,
   type NormalBehaviorPreview,
+  fetchDashboardConfig,
 } from '../api';
 import { ScoreBars, CRITERIA_LABELS } from './ScoreBar';
 import { AskAiPanel } from './AskAiPanel';
@@ -80,6 +81,9 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
   const [reEvalLoading, setReEvalLoading] = useState(false);
   const [reEvalMsg, setReEvalMsg] = useState('');
 
+  // ── Dashboard config (score display window label) ─────
+  const [scoreWindowDays, setScoreWindowDays] = useState(7);
+
   // ── Normal behavior templates (for hiding "Mark OK" on already-matched events) ──
   const [normalTemplates, setNormalTemplates] = useState<NormalBehaviorTemplate[]>([]);
   const normalRegexes = useRef<Array<{ regex: RegExp; id: string }>>([]);
@@ -103,6 +107,17 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
   }, [system.id]);
 
   useEffect(() => { loadNormalTemplates(); }, [loadNormalTemplates]);
+
+  // Load dashboard config to display the correct time range label
+  useEffect(() => {
+    fetchDashboardConfig()
+      .then((resp) => {
+        if (resp?.config?.score_display_window_days) {
+          setScoreWindowDays(resp.config.score_display_window_days);
+        }
+      })
+      .catch(() => { /* use default 7 */ });
+  }, []);
 
   /** Check if a message matches any active normal-behavior template. */
   const isNormalBehavior = useCallback((message: string): boolean => {
@@ -679,7 +694,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
       {/* Current scores — clickable for criterion drill-down */}
       {Object.keys(system.scores).length > 0 && (
         <div className="drill-down-scores">
-          <p className="drill-down-score-hint">Click a score bar to see the highest-scoring events for that criterion. <span className="score-timerange">Scores reflect last 7 days.</span></p>
+          <p className="drill-down-score-hint">Click a score bar to see the highest-scoring events for that criterion. <span className="score-timerange">Scores reflect last {scoreWindowDays} day{scoreWindowDays !== 1 ? 's' : ''}.</span></p>
           <ScoreBars
             scores={system.scores}
             onCriterionClick={handleCriterionClick}

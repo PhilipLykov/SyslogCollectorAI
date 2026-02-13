@@ -5727,3 +5727,80 @@ tr.event-row-acked:hover {
   color: var(--red);
   font-weight: 600;
 }
+
+/* ── Dashboard Config section ─────────────────────────── */
+
+.config-section {
+  max-width: 700px;
+}
+
+.config-section h3 {
+  font-size: 1.15rem;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.config-section-desc {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-bottom: 20px;
+  line-height: 1.5;
+}
+
+.config-form-group {
+  margin-bottom: 20px;
+}
+
+.config-label {
+  display: block;
+  font-weight: 500;
+  font-size: 0.9rem;
+  margin-bottom: 6px;
+}
+
+.config-hint {
+  display: block;
+  font-weight: 400;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+  line-height: 1.4;
+}
+
+.config-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.config-input {
+  font-size: 0.9rem;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.config-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(129, 140, 248, 0.25);
+}
+
+.config-input-short {
+  width: 80px;
+  text-align: center;
+}
+
+.config-unit {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.config-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 24px;
+}

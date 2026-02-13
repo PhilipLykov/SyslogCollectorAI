@@ -18,13 +18,34 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
   const db = getDb();
   const eventSource = getDefaultEventSource(db);
 
+  /** Load the dashboard config from app_config (score_display_window_days). */
+  async function loadDashboardConfig(): Promise<{ score_display_window_days: number }> {
+    const DEFAULTS = { score_display_window_days: 7 };
+    try {
+      const row = await db('app_config').where({ key: 'dashboard_config' }).first('value');
+      if (!row) return DEFAULTS;
+      const raw = typeof row.value === 'string' ? JSON.parse(row.value) : row.value;
+      if (raw && typeof raw === 'object') {
+        const days = Number((raw as any).score_display_window_days);
+        return {
+          score_display_window_days:
+            Number.isFinite(days) && days >= 1 && days <= 90 ? days : DEFAULTS.score_display_window_days,
+        };
+      }
+      return DEFAULTS;
+    } catch {
+      return DEFAULTS;
+    }
+  }
+
   // ── Dashboard overview: systems with latest effective scores ─
   app.get(
     '/api/v1/dashboard/systems',
     { preHandler: requireAuth(PERMISSIONS.DASHBOARD_VIEW) },
     async (_request, reply) => {
       const systems = await db('monitored_systems').orderBy('name').select('*');
-      const since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+      const dashCfg = await loadDashboardConfig();
+      const sinceWindow = new Date(Date.now() - dashCfg.score_display_window_days * 24 * 60 * 60 * 1000).toISOString();
       const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
       const result = [];
@@ -40,13 +61,13 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
         }> = {};
 
         if (latestWindow) {
-          // Primary scores: MAX across the last 7 days — gives the user a
-          // stable view of recent issues without flipping to zero as soon as
-          // a 2-hour window expires.  The dashboard label shows "Last 7 days".
+          // Primary scores: MAX across the configured display window — gives
+          // the user a stable view of recent issues without flipping to zero
+          // as soon as a single analysis window expires.
           const recentRows = await db('effective_scores')
             .join('windows', 'effective_scores.window_id', 'windows.id')
             .where('effective_scores.system_id', system.id)
-            .where('windows.to_ts', '>=', since7d)
+            .where('windows.to_ts', '>=', sinceWindow)
             .groupBy('effective_scores.criterion_id')
             .select(
               'effective_scores.criterion_id',
@@ -452,17 +473,19 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
       }
 
       // Invalidate stale effective_scores from older windows within the
-      // dashboard's 7-day display range so the MAX() query returns only the
-      // fresh re-evaluate scores.  Without this, old windows with high scores
-      // (e.g. from before events were marked as normal) keep inflating the bar.
-      const since7dForReeval = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+      // dashboard's configured display range so the MAX() query returns only
+      // the fresh re-evaluate scores.  Without this, old windows with high
+      // scores (e.g. from before events were marked as normal) keep inflating
+      // the bar.
+      const dashCfgReeval = await loadDashboardConfig();
+      const sinceWindowReeval = new Date(Date.now() - dashCfgReeval.score_display_window_days * 24 * 60 * 60 * 1000).toISOString();
       await db('effective_scores')
         .where('system_id', systemId)
         .whereNot('window_id', windowId)
         .whereIn('window_id', function () {
           this.select('id').from('windows')
             .where('system_id', systemId)
-            .where('to_ts', '>=', since7dForReeval)
+            .where('to_ts', '>=', sinceWindowReeval)
             .whereNot('id', windowId);
         })
         .update({

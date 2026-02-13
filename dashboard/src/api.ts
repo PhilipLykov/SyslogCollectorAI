@@ -1251,6 +1251,28 @@ export async function updateMetaAnalysisConfig(data: Partial<MetaAnalysisConfig>
   });
 }
 
+// ── Dashboard Config ─────────────────────────────────────────
+
+export interface DashboardConfig {
+  score_display_window_days: number;
+}
+
+export interface DashboardConfigResponse {
+  config: DashboardConfig;
+  defaults: DashboardConfig;
+}
+
+export async function fetchDashboardConfig(): Promise<DashboardConfigResponse> {
+  return apiFetch('/api/v1/dashboard-config');
+}
+
+export async function updateDashboardConfig(data: Partial<DashboardConfig>): Promise<{ config: DashboardConfig; defaults: DashboardConfig }> {
+  return apiFetch('/api/v1/dashboard-config', {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
 // ── Database Maintenance ─────────────────────────────────────
 
 export interface MaintenanceConfig {

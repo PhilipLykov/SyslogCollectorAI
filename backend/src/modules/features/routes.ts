@@ -957,6 +957,85 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
     },
   );
 
+  // ── Dashboard Config (score display window, etc.) ──────────
+
+  const DASHBOARD_CONFIG_DEFAULTS: Record<string, unknown> = {
+    score_display_window_days: 7,
+  };
+
+  /** GET /api/v1/dashboard-config — return current dashboard config with defaults. */
+  app.get(
+    '/api/v1/dashboard-config',
+    { preHandler: requireAuth(PERMISSIONS.AI_CONFIG_VIEW) },
+    async (_req, reply) => {
+      try {
+        const row = await db('app_config').where({ key: 'dashboard_config' }).first('value');
+        let parsed: Record<string, unknown> = {};
+        if (row) {
+          const raw = typeof row.value === 'string' ? JSON.parse(row.value) : row.value;
+          if (raw && typeof raw === 'object') parsed = raw as Record<string, unknown>;
+        }
+        const config = { ...DASHBOARD_CONFIG_DEFAULTS, ...parsed };
+        return reply.send({ config, defaults: DASHBOARD_CONFIG_DEFAULTS });
+      } catch (err: any) {
+        app.log.error(`[${localTimestamp()}] Failed to fetch dashboard config: ${err.message}`);
+        return reply.code(500).send({ error: 'Failed to fetch config.' });
+      }
+    },
+  );
+
+  /** PUT /api/v1/dashboard-config — update dashboard config with validation. */
+  app.put(
+    '/api/v1/dashboard-config',
+    { preHandler: requireAuth(PERMISSIONS.AI_CONFIG_MANAGE) },
+    async (request, reply) => {
+      const body = (request.body as any) ?? {};
+
+      if (body.score_display_window_days !== undefined) {
+        const v = Number(body.score_display_window_days);
+        if (!Number.isFinite(v) || v < 1 || v > 90) {
+          return reply.code(400).send({ error: 'score_display_window_days must be 1–90.' });
+        }
+      }
+
+      try {
+        const existing = await db('app_config').where({ key: 'dashboard_config' }).first('value');
+        let current: Record<string, unknown> = { ...DASHBOARD_CONFIG_DEFAULTS };
+        if (existing) {
+          const raw = typeof existing.value === 'string' ? JSON.parse(existing.value) : existing.value;
+          if (raw && typeof raw === 'object') current = { ...current, ...(raw as Record<string, unknown>) };
+        }
+
+        const allowedKeys = Object.keys(DASHBOARD_CONFIG_DEFAULTS);
+        for (const key of allowedKeys) {
+          if (body[key] !== undefined) {
+            current[key] = body[key];
+          }
+        }
+
+        await db.raw(`
+          INSERT INTO app_config (key, value) VALUES ('dashboard_config', ?::jsonb)
+          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        `, [JSON.stringify(current)]);
+
+        await writeAuditLog(db, {
+          action: 'config_update',
+          resource_type: 'dashboard_config',
+          ip: request.ip,
+          user_id: request.currentUser?.id,
+          session_id: request.currentSession?.id,
+        });
+
+        app.log.info(`[${localTimestamp()}] Dashboard config updated`);
+
+        return reply.send({ config: current, defaults: DASHBOARD_CONFIG_DEFAULTS });
+      } catch (err: any) {
+        app.log.error(`[${localTimestamp()}] Failed to update dashboard config: ${err.message}`);
+        return reply.code(500).send({ error: 'Failed to update config.' });
+      }
+    },
+  );
+
   // ── Database Maintenance Config ────────────────────────────
 
   const MAINT_CONFIG_DEFAULTS = {
