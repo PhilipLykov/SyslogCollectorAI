@@ -679,7 +679,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
       {/* Current scores — clickable for criterion drill-down */}
       {Object.keys(system.scores).length > 0 && (
         <div className="drill-down-scores">
-          <p className="drill-down-score-hint">Click a score bar to see the highest-scoring events for that criterion.</p>
+          <p className="drill-down-score-hint">Click a score bar to see the highest-scoring events for that criterion. <span className="score-timerange">Scores reflect last 7 days.</span></p>
           <ScoreBars
             scores={system.scores}
             onCriterionClick={handleCriterionClick}

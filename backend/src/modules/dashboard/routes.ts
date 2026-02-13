@@ -24,7 +24,7 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
     { preHandler: requireAuth(PERMISSIONS.DASHBOARD_VIEW) },
     async (_request, reply) => {
       const systems = await db('monitored_systems').orderBy('name').select('*');
-      const since2h = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+      const since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
       const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
       const result = [];
@@ -37,16 +37,16 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
 
         let scores: Record<string, {
           effective: number; meta: number; max_event: number;
-          peak_24h?: number;
         }> = {};
 
         if (latestWindow) {
-          // Primary scores: MAX across recent 2 hours — reflects CURRENT state,
-          // not a stale spike from many hours ago.
+          // Primary scores: MAX across the last 7 days — gives the user a
+          // stable view of recent issues without flipping to zero as soon as
+          // a 2-hour window expires.  The dashboard label shows "Last 7 days".
           const recentRows = await db('effective_scores')
             .join('windows', 'effective_scores.window_id', 'windows.id')
             .where('effective_scores.system_id', system.id)
-            .where('windows.to_ts', '>=', since2h)
+            .where('windows.to_ts', '>=', since7d)
             .groupBy('effective_scores.criterion_id')
             .select(
               'effective_scores.criterion_id',
@@ -55,52 +55,14 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
               db.raw('MAX(effective_scores.max_event_score) as max_event_score'),
             );
 
-          // 24h peak: MAX across the full 24 hours — shown as secondary context
-          // so the user can see if something spiked earlier today.
-          const peak24hRows = await db('effective_scores')
-            .join('windows', 'effective_scores.window_id', 'windows.id')
-            .where('effective_scores.system_id', system.id)
-            .where('windows.to_ts', '>=', since24h)
-            .groupBy('effective_scores.criterion_id')
-            .select(
-              'effective_scores.criterion_id',
-              db.raw('MAX(effective_scores.effective_value) as peak_value'),
-            );
-
-          const peakMap = new Map<number, number>();
-          for (const p of peak24hRows) {
-            peakMap.set(p.criterion_id, Number(p.peak_value) || 0);
-          }
-
           for (const row of recentRows) {
             const criterion = CRITERIA.find((c) => c.id === row.criterion_id);
             if (criterion) {
-              const eff = Number(row.effective_value) || 0;
-              const peak = peakMap.get(row.criterion_id) ?? eff;
               scores[criterion.slug] = {
-                effective: eff,
+                effective: Number(row.effective_value) || 0,
                 meta: Number(row.meta_score) || 0,
                 max_event: Number(row.max_event_score) || 0,
-                peak_24h: peak > eff ? peak : undefined, // Only include if peak exceeds current
               };
-            }
-          }
-
-          // Also include criteria that only appear in the 24h data (not recent 2h)
-          // — these had activity earlier but are now calm.  Show as 0 effective
-          // with a peak_24h indicator so the user still knows about them.
-          for (const p of peak24hRows) {
-            const criterion = CRITERIA.find((c) => c.id === p.criterion_id);
-            if (criterion && !scores[criterion.slug]) {
-              const peak = Number(p.peak_value) || 0;
-              if (peak > 0) {
-                scores[criterion.slug] = {
-                  effective: 0,
-                  meta: 0,
-                  max_event: 0,
-                  peak_24h: peak,
-                };
-              }
             }
           }
         }
@@ -446,7 +408,12 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
       const llm = new OpenAiAdapter();
       llm.updateConfig({ apiKey: aiCfg.apiKey, model: aiCfg.model, baseUrl: aiCfg.baseUrl });
 
-      // Create a window covering the last 2 hours (matches dashboard's current-score range)
+      // Create a window covering the last 2 hours of events for the LLM to analyze.
+      // The dashboard displays MAX(effective_scores) over 7 days, but the
+      // re-evaluate window covers only the most recent 2 hours of events
+      // (a larger window would be too expensive for the LLM). After analysis,
+      // stale scores from older windows in the 7-day range are zeroed so the
+      // dashboard reflects the fresh analysis.
       const to_ts = new Date().toISOString();
       const from_ts = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
 
@@ -484,16 +451,18 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
         });
       }
 
-      // Invalidate stale effective_scores from older windows within the 2-hour
-      // range so the dashboard's MAX() query returns only the fresh re-evaluate
-      // scores. Without this, old windows still pull the dashboard scores up.
+      // Invalidate stale effective_scores from older windows within the
+      // dashboard's 7-day display range so the MAX() query returns only the
+      // fresh re-evaluate scores.  Without this, old windows with high scores
+      // (e.g. from before events were marked as normal) keep inflating the bar.
+      const since7dForReeval = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
       await db('effective_scores')
         .where('system_id', systemId)
         .whereNot('window_id', windowId)
         .whereIn('window_id', function () {
           this.select('id').from('windows')
             .where('system_id', systemId)
-            .where('to_ts', '>=', from_ts)
+            .where('to_ts', '>=', since7dForReeval)
             .whereNot('id', windowId);
         })
         .update({

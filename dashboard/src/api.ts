@@ -351,8 +351,6 @@ export interface SystemScoreInfo {
   effective: number;
   meta: number;
   max_event: number;
-  /** 24h peak — only present when the 24h peak exceeds the current (2h) score. */
-  peak_24h?: number;
 }
 
 /** Counts of active (open + acknowledged) findings by severity. */
