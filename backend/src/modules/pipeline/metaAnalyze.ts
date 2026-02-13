@@ -260,10 +260,12 @@ export async function metaAnalyzeWindow(
   // Build eventsForLlm AND the index→eventId mapping for evidence linking
   const templateGroupValues = Array.from(templateGroups.values());
   const eventIndexToId = new Map<number, string>(); // 1-indexed → event UUID
+  const eventIndexToMessage = new Map<number, string>(); // 1-indexed → event message
 
   let eventsForLlm = templateGroupValues.map((g, i) => {
-    // Track mapping: LLM event number (1-indexed) → representative event ID
+    // Track mapping: LLM event number (1-indexed) → representative event ID + message
     eventIndexToId.set(i + 1, g.representativeEventId);
+    eventIndexToMessage.set(i + 1, g.message);
 
     // In context_only mode, annotate acknowledged events with the ack prompt
     if (g.acknowledged && ackMode === 'context_only') {
@@ -289,12 +291,13 @@ export async function metaAnalyzeWindow(
   // ── High-score prioritisation ─────────────────────────────
   // Sort by max score descending so the most important events are always
   // included even when the template count exceeds the cap.
-  // NOTE: After sorting, the eventIndexToId mapping is rebuilt to stay in sync.
+  // NOTE: After sorting, the eventIndexToId / eventIndexToMessage mappings are rebuilt to stay in sync.
   if (prioritizeHighScores && eventsForLlm.length > 1) {
-    // Pair events with their original representative IDs before sorting
+    // Pair events with their original representative IDs + messages before sorting
     const paired = eventsForLlm.map((e, i) => ({
       event: e,
       repId: templateGroupValues[i].representativeEventId,
+      message: templateGroupValues[i].message,
     }));
     paired.sort((a, b) => {
       const safeMax = (s: typeof a.event.scores) => {
@@ -307,11 +310,13 @@ export async function metaAnalyzeWindow(
       };
       return safeMax(b.event.scores) - safeMax(a.event.scores); // descending
     });
-    // Rebuild both arrays in sorted order
+    // Rebuild all arrays/maps in sorted order
     eventsForLlm = paired.map((p) => p.event);
     eventIndexToId.clear();
+    eventIndexToMessage.clear();
     for (let i = 0; i < paired.length; i++) {
       eventIndexToId.set(i + 1, paired[i].repId);
+      eventIndexToMessage.set(i + 1, paired[i].message);
     }
   }
 
@@ -540,6 +545,78 @@ export async function metaAnalyzeWindow(
             `(${openFinding.text.slice(0, 60)}…): no event_refs provided. ` +
             `Findings require event evidence to be resolved.`,
           );
+          continue;
+        }
+
+        // ── Guardrail 1: Reject contradictory evidence ────────
+        // If the LLM's own evidence text says the issue is NOT resolved,
+        // the resolution is clearly a hallucination / logic failure.
+        const evidenceText = (resolvedEntry.evidence ?? '').toLowerCase();
+        const contradictoryPhrases = [
+          'remains unresolved', 'not resolved', 'still unresolved',
+          'issue remains', 'issue persists', 'still active',
+          'still occurring', 'still happening', 'still ongoing',
+          'not been resolved', 'has not been fixed', 'not yet resolved',
+          'no evidence of resolution', 'no resolution',
+          'issue continues', 'problem persists', 'problem remains',
+          'still present', 'still exists',
+        ];
+        const isContradictory = contradictoryPhrases.some((p) => evidenceText.includes(p));
+        if (isContradictory) {
+          console.log(
+            `[${localTimestamp()}] Rejected LLM resolution for finding index ${resolvedEntry.index} ` +
+            `(${openFinding.text.slice(0, 60)}…): evidence text contradicts resolution ` +
+            `("${resolvedEntry.evidence?.slice(0, 100)}…"). Treating as still-active instead.`,
+          );
+          // Treat as still-active: reset consecutive_misses and refresh last_seen
+          await trx('findings')
+            .where({ id: dbId })
+            .whereIn('status', ['open', 'acknowledged'])
+            .update({
+              consecutive_misses: 0,
+              last_seen_at: nowIso,
+              occurrence_count: trx.raw('occurrence_count + 1'),
+            });
+          continue;
+        }
+
+        // ── Guardrail 2: Reject self-referential resolutions ──
+        // If every referenced event's message is substantially similar to the
+        // finding's own text, the LLM is resolving the finding with the same
+        // problem — not a counter-event. This is always invalid.
+        const findingTextLower = openFinding.text.toLowerCase();
+        const findingWords = new Set(findingTextLower.split(/\s+/).filter((w) => w.length > 3));
+        let allSelfReferential = true;
+        for (const ref of eventRefs) {
+          const refMessage = (eventIndexToMessage.get(ref) ?? '').toLowerCase();
+          if (!refMessage) continue;
+          const refWords = new Set(refMessage.split(/\s+/).filter((w) => w.length > 3));
+          // Jaccard-like overlap: if >60% of the finding's words appear in the
+          // event message, the event describes the same problem, not a resolution.
+          let overlap = 0;
+          for (const w of findingWords) {
+            if (refWords.has(w)) overlap++;
+          }
+          const overlapRatio = findingWords.size > 0 ? overlap / findingWords.size : 0;
+          if (overlapRatio < 0.5) {
+            allSelfReferential = false;
+            break;
+          }
+        }
+        if (allSelfReferential) {
+          console.log(
+            `[${localTimestamp()}] Rejected LLM resolution for finding index ${resolvedEntry.index} ` +
+            `(${openFinding.text.slice(0, 60)}…): proof events describe the same problem, ` +
+            `not a counter-event. Treating as still-active instead.`,
+          );
+          await trx('findings')
+            .where({ id: dbId })
+            .whereIn('status', ['open', 'acknowledged'])
+            .update({
+              consecutive_misses: 0,
+              last_seen_at: nowIso,
+              occurrence_count: trx.raw('occurrence_count + 1'),
+            });
           continue;
         }
 

@@ -326,10 +326,13 @@ For each open finding listed in "Previously open findings", you MUST classify it
 2. STILL ACTIVE — you see events in the current window that relate to or confirm this issue is still ongoing. Add to still_active_indices.
 3. UNCERTAIN — you see NO events related to this finding in the current window (neither confirming nor denying). Do NOT add to either list. The finding stays open and is tracked as dormant.
 
-RESOLUTION RULES (STRICT):
-- ONLY resolve a finding when you see a SPECIFIC EVENT in the current window that POSITIVELY CONFIRMS the issue is fixed. The resolution event must logically contradict the original issue.
+RESOLUTION RULES (STRICT — read carefully):
+- ONLY resolve a finding when you see a SPECIFIC EVENT in the current window that POSITIVELY CONFIRMS the issue is FIXED. The resolution event must LOGICALLY CONTRADICT the original issue.
+- The proof event MUST be a DIFFERENT type of event from the problem event. An event that describes the SAME problem is NEVER proof of resolution — it is proof the issue is STILL ACTIVE.
+- CRITICAL: If you see an event about "power stack lost redundancy," that is NOT resolution evidence for a finding about "power stack lost redundancy" — it is the SAME PROBLEM REPEATING. Put it in still_active_indices instead.
+- CRITICAL: If your evidence text says "remains unresolved", "still active", "still operating in [problem state]", or anything suggesting the issue persists, then the finding is NOT resolved — it is STILL ACTIVE. Do not put it in resolved_indices.
 - You MUST provide evidence that references the specific event number(s) from the current window AND include those numbers in the event_refs array.
-- Examples of valid resolutions:
+- Examples of VALID resolutions (the proof event CONTRADICTS the problem):
   - Finding: "Port 11 disabled by port security"
     Resolution event [5]: "Port 11 is enabled"
     -> {"index": 0, "evidence": "Event [5] confirms port 11 was re-enabled", "event_refs": [5]}
@@ -339,10 +342,17 @@ RESOLUTION RULES (STRICT):
   - Finding: "Service nginx failing health checks"
     Resolution events [7] and [9]: "nginx started", "health check OK"
     -> {"index": 1, "evidence": "Events [7] and [9] confirm nginx recovered", "event_refs": [7, 9]}
+- Examples of INVALID resolutions (the proof event is the SAME problem — use still_active_indices instead):
+  - Finding: "Switch 2's power stack lost redundancy"
+    Event [1]: "Switch 2's power stack lost redundancy and is now operating in power sharing mode"
+    -> This is the SAME PROBLEM, NOT a resolution. Add to still_active_indices: [0]
+  - Finding: "NTP sync failure on core router"
+    Event [3]: "NTP sync failed on 10.0.0.1"
+    -> This CONFIRMS the issue is still happening. Add to still_active_indices: [0]
 - Each resolved_indices entry MUST include an "event_refs" array with at least one event number. Resolutions without event_refs will be REJECTED by the system.
 - Absence of the issue in the current window is NOT evidence of resolution. Just because "port 11 disabled" stopped appearing does NOT mean port 11 was re-enabled. Only resolve when you see the POSITIVE counter-event.
 - There is NO time-based auto-resolution in this system. A finding stays open until proven fixed by a specific event. This is by design.
-- If in doubt, do NOT resolve. False resolutions destroy user trust.
+- If in doubt, do NOT resolve. False resolutions destroy user trust. The system will reject contradictory or self-referential resolutions automatically.
 
 ACKNOWLEDGED FINDINGS:
 Findings marked [ACK] have been acknowledged by an operator. Do NOT create new findings for issues already tracked by acknowledged findings. You may still resolve them if there is strong event evidence the issue is fixed.
