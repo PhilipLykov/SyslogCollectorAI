@@ -32,9 +32,11 @@ interface DrillDownProps {
   onBack: () => void;
   onAuthError: () => void;
   currentUser?: import('../api').CurrentUser | null;
+  /** Called after a "Mark OK" template is created so the parent can refresh system scores. */
+  onRefreshSystem?: () => void;
 }
 
-export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDownProps) {
+export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshSystem }: DrillDownProps) {
   const [events, setEvents] = useState<LogEvent[]>([]);
   const [meta, setMeta] = useState<MetaResult | null>(null);
   const [loading, setLoading] = useState(true);
@@ -452,11 +454,31 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
         pattern: markOkPattern.trim(),
         message: !markOkModal.eventId ? markOkModal.message : undefined,
       });
-      setMarkOkSuccess('Template created. Future matching events will be treated as normal behavior.');
+      setMarkOkSuccess('Scores recalculated. Future matching events will be treated as normal behavior.');
       setTimeout(() => {
         setMarkOkModal(null);
         setMarkOkSuccess('');
       }, 2500);
+
+      // Refresh criterion drill-down data (event scores are now zeroed for matching events)
+      if (selectedCriterion) {
+        const criterion = CRITERIA.find((c) => c.slug === selectedCriterion);
+        if (criterion) {
+          try {
+            const data = await fetchGroupedEventScores(system.id, {
+              criterion_id: criterion.id,
+              limit: 30,
+              min_score: 0.001,
+            });
+            setCriterionGroups(data);
+            setExpandedGroup(null);
+            setExpandedGroupEvents([]);
+          } catch { /* ignore refresh error */ }
+        }
+      }
+
+      // Notify parent to refresh system scores on the dashboard
+      onRefreshSystem?.();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('Authentication')) { onAuthErrorRef.current(); return; }
@@ -464,7 +486,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser }: DrillDow
     } finally {
       setMarkOkLoading(false);
     }
-  }, [markOkModal, markOkPattern, system.id]);
+  }, [markOkModal, markOkPattern, system.id, selectedCriterion, onRefreshSystem]);
 
   // ── Compute filtered findings ───────────────────────────
   const openFindings = findings.filter((f) => f.status === 'open');

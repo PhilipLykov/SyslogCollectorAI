@@ -1,14 +1,110 @@
 import type { FastifyInstance } from 'fastify';
+import type { Knex } from 'knex';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../../db/index.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { PERMISSIONS } from '../../middleware/permissions.js';
 import { writeAuditLog } from '../../middleware/audit.js';
 import { localTimestamp } from '../../config/index.js';
+import { CRITERIA } from '../../types/index.js';
 import {
   generateNormalPattern,
   patternToRegex,
 } from '../pipeline/normalBehavior.js';
+
+/** Default meta-weight for effective score blending (must match metaAnalyze). */
+const DEFAULT_W_META = 0.7;
+
+/**
+ * Retroactively apply a new normal-behavior template:
+ *  1. Zero out event_scores for events matching the pattern (last 24h)
+ *  2. Recalculate effective_scores for affected windows
+ *
+ * This ensures the dashboard reflects the change immediately, rather than
+ * waiting for the next meta-analysis cycle.
+ */
+async function retroactivelyApplyTemplate(
+  db: Knex,
+  patternRegex: string,
+  systemId: string | null,
+): Promise<{ zeroedEvents: number; updatedWindows: number }> {
+  const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+  // 1. Zero out event_scores for matching events (PostgreSQL ~* = case-insensitive regex)
+  const subquery = db('events')
+    .select('id')
+    .where('timestamp', '>=', since24h)
+    .whereRaw('message ~* ?', [patternRegex]);
+
+  if (systemId) {
+    subquery.where('system_id', systemId);
+  }
+
+  const zeroedEvents = await db('event_scores')
+    .whereIn('event_id', subquery)
+    .where('score', '>', 0)
+    .update({ score: 0 });
+
+  if (zeroedEvents === 0) {
+    return { zeroedEvents: 0, updatedWindows: 0 };
+  }
+
+  // 2. Recalculate effective_scores for recent windows
+  const windowQuery = db('windows')
+    .where('to_ts', '>=', since24h)
+    .select('id', 'system_id', 'from_ts', 'to_ts');
+
+  if (systemId) {
+    windowQuery.where('system_id', systemId);
+  }
+
+  const windows = await windowQuery;
+  let updatedWindows = 0;
+
+  for (const w of windows) {
+    let windowUpdated = false;
+
+    for (const criterion of CRITERIA) {
+      const existing = await db('effective_scores')
+        .where({ window_id: w.id, system_id: w.system_id, criterion_id: criterion.id })
+        .first();
+
+      if (!existing) continue;
+
+      // Recalculate max_event_score from event_scores within this window
+      const maxRow = await db('event_scores')
+        .join('events', 'event_scores.event_id', 'events.id')
+        .where('events.system_id', w.system_id)
+        .where('events.timestamp', '>=', w.from_ts)
+        .where('events.timestamp', '<=', w.to_ts)
+        .where('event_scores.criterion_id', criterion.id)
+        .max('event_scores.score as max_score')
+        .first();
+
+      const newMaxEvent = Number(maxRow?.max_score ?? 0);
+      const metaScore = Number(existing.meta_score) || 0;
+      const newEffective = DEFAULT_W_META * metaScore + (1 - DEFAULT_W_META) * newMaxEvent;
+
+      await db('effective_scores')
+        .where({ window_id: w.id, system_id: w.system_id, criterion_id: criterion.id })
+        .update({
+          max_event_score: newMaxEvent,
+          effective_value: newEffective,
+          updated_at: new Date().toISOString(),
+        });
+
+      windowUpdated = true;
+    }
+
+    if (windowUpdated) updatedWindows++;
+  }
+
+  console.log(
+    `[${localTimestamp()}] Retroactive normal-behavior update: zeroed ${zeroedEvents} event_scores, recalculated ${updatedWindows} windows`,
+  );
+
+  return { zeroedEvents, updatedWindows };
+}
 
 /**
  * Normal Behavior Templates — CRUD API.
@@ -144,7 +240,17 @@ export async function registerNormalBehaviorRoutes(app: FastifyInstance): Promis
         `[${localTimestamp()}] Normal behavior template created by ${username}: "${trimmedPattern}" (system=${systemId ?? 'global'})`,
       );
 
-      return reply.code(201).send(created);
+      // Retroactively zero scores for matching events and recalculate effective scores.
+      // This ensures the dashboard reflects the change immediately.
+      const retroResult = await retroactivelyApplyTemplate(db, patternRegex, systemId);
+
+      return reply.code(201).send({
+        ...created,
+        retroactive: {
+          zeroed_events: retroResult.zeroedEvents,
+          updated_windows: retroResult.updatedWindows,
+        },
+      });
     },
   );
 

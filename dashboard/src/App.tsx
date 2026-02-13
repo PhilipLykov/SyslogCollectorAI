@@ -246,6 +246,7 @@ export default function App() {
           onBack={() => setSelectedSystem(null)}
           onAuthError={handleLogout}
           currentUser={currentUser}
+          onRefreshSystem={() => loadSystems()}
         />
       ) : (
         <>
