@@ -161,7 +161,7 @@ export default function App() {
         <div className="header-left">
           <h1>
             <span>Log</span>Sentinel AI
-            <span className="version-tag">v0.8.2-beta</span>
+            <span className="version-tag">v0.8.3-beta</span>
           </h1>
           <nav className="header-nav" role="tablist" aria-label="Main navigation">
             <button
