@@ -836,6 +836,14 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
     severity_decay_enabled: false,
     severity_decay_after_occurrences: 10,
     max_open_findings_per_system: 50,
+    // Legacy auto-resolve fields (kept for backward compat, no longer used)
+    auto_resolve_critical_days: 14,
+    auto_resolve_high_days: 10,
+    auto_resolve_medium_days: 7,
+    auto_resolve_low_hours: 72,
+    auto_resolve_info_hours: 48,
+    // Legacy flapping fields (kept for backward compat, no longer used)
+    flapping_threshold: 3,
     // Number of previous window summaries included as LLM context
     context_window_size: 5,
     // How far back (days) to check for recently resolved findings when detecting recurring issues

@@ -722,7 +722,7 @@ export class OpenAiAdapter implements LlmAdapter {
     const data = await res.json() as any;
     const content = data.choices?.[0]?.message?.content;
     if (!content) {
-      console.warn(`[${localTimestamp()}] LLM returned empty content (model=${this.model})`);
+      console.warn(`[${localTimestamp()}] LLM returned empty content (model=${effectiveModel})`);
     }
     const usage: LlmUsageInfo = {
       model: effectiveModel,
