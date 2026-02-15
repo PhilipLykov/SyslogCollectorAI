@@ -1191,6 +1191,10 @@ export interface TokenOptimizationConfig {
   low_score_min_scorings: number;
   meta_max_events: number;
   meta_prioritize_high_scores: boolean;
+  /** O1: Skip meta-analysis LLM call when all events scored 0. */
+  skip_zero_score_meta: boolean;
+  /** O2: Filter zero-score events from meta-analysis prompt. */
+  filter_zero_score_meta_events: boolean;
 }
 
 export interface TokenOptResponse {
@@ -1229,6 +1233,10 @@ export interface MetaAnalysisConfig {
   severity_decay_enabled: boolean;
   severity_decay_after_occurrences: number;
   max_open_findings_per_system: number;
+  /** Number of previous window summaries included as LLM context. */
+  context_window_size: number;
+  /** How far back (days) to check for recently resolved findings when detecting recurring issues. */
+  recurring_lookback_days: number;
 }
 
 export interface MetaAnalysisConfigResponse {
@@ -1270,6 +1278,55 @@ export async function fetchDashboardConfig(): Promise<DashboardConfigResponse> {
 
 export async function updateDashboardConfig(data: Partial<DashboardConfig>): Promise<{ config: DashboardConfig; defaults: DashboardConfig }> {
   return apiFetch('/api/v1/dashboard-config', {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+// ── Pipeline Config ──────────────────────────────────────────
+
+export interface PipelineConfig {
+  pipeline_interval_minutes: number;
+  window_minutes: number;
+  scoring_limit_per_run: number;
+  effective_score_meta_weight: number;
+}
+
+export interface PipelineConfigResponse {
+  config: PipelineConfig;
+  defaults: PipelineConfig;
+}
+
+export async function fetchPipelineConfig(): Promise<PipelineConfigResponse> {
+  return apiFetch('/api/v1/pipeline-config');
+}
+
+export async function updatePipelineConfig(data: Partial<PipelineConfig>): Promise<{ config: PipelineConfig; defaults: PipelineConfig }> {
+  return apiFetch('/api/v1/pipeline-config', {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+// ── Per-Task Model Config (O3) ──────────────────────────────
+
+export interface TaskModelConfig {
+  scoring_model: string;
+  meta_model: string;
+  rag_model: string;
+}
+
+export interface TaskModelConfigResponse {
+  config: TaskModelConfig;
+  defaults: TaskModelConfig;
+}
+
+export async function fetchTaskModelConfig(): Promise<TaskModelConfigResponse> {
+  return apiFetch('/api/v1/task-model-config');
+}
+
+export async function updateTaskModelConfig(data: Partial<TaskModelConfig>): Promise<{ config: TaskModelConfig; defaults: TaskModelConfig }> {
+  return apiFetch('/api/v1/task-model-config', {
     method: 'PUT',
     body: JSON.stringify(data),
   });

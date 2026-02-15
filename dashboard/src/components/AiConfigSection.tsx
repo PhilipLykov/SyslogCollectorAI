@@ -10,6 +10,10 @@ import {
   fetchMetaAnalysisConfig, updateMetaAnalysisConfig,
   type CriterionGuidelinesResponse,
   fetchCriterionGuidelines, updateCriterionGuidelines,
+  type PipelineConfig, type PipelineConfigResponse,
+  fetchPipelineConfig, updatePipelineConfig,
+  type TaskModelConfig, type TaskModelConfigResponse,
+  fetchTaskModelConfig, updateTaskModelConfig,
 } from '../api';
 
 interface AiConfigSectionProps {
@@ -72,6 +76,22 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
   const [metaSuccess, setMetaSuccess] = useState('');
   const [metaError, setMetaError] = useState('');
 
+  // Pipeline config state
+  const [pipelineCfgResp, setPipelineCfgResp] = useState<PipelineConfigResponse | null>(null);
+  const [pipeCfg, setPipeCfg] = useState<PipelineConfig | null>(null);
+  const [showPipeline, setShowPipeline] = useState(false);
+  const [savingPipe, setSavingPipe] = useState(false);
+  const [pipeSuccess, setPipeSuccess] = useState('');
+  const [pipeError, setPipeError] = useState('');
+
+  // Per-task model config state
+  const [taskModelResp, setTaskModelResp] = useState<TaskModelConfigResponse | null>(null);
+  const [taskModelCfg, setTaskModelCfg] = useState<TaskModelConfig | null>(null);
+  const [showTaskModel, setShowTaskModel] = useState(false);
+  const [savingTaskModel, setSavingTaskModel] = useState(false);
+  const [taskModelSuccess, setTaskModelSuccess] = useState('');
+  const [taskModelError, setTaskModelError] = useState('');
+
   // Criterion guidelines state
   const [guidelinesData, setGuidelinesData] = useState<CriterionGuidelinesResponse | null>(null);
   const [guideEdits, setGuideEdits] = useState<Record<string, string>>({});
@@ -86,13 +106,15 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
     try {
       setLoading(true);
       setError('');
-      const [data, prompts, ack, tok, meta, guides] = await Promise.all([
+      const [data, prompts, ack, tok, meta, guides, pipe, taskModel] = await Promise.all([
         fetchAiConfig(),
         fetchAiPrompts(),
         fetchAckConfig(),
         fetchTokenOptConfig(),
         fetchMetaAnalysisConfig(),
         fetchCriterionGuidelines(),
+        fetchPipelineConfig(),
+        fetchTaskModelConfig(),
       ]);
       setConfig(data);
       setModel(data.model);
@@ -110,6 +132,10 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
       setTokCfg(tok.config);
       setMetaAnalysis(meta);
       setMetaCfg(meta.config);
+      setPipelineCfgResp(pipe);
+      setPipeCfg(pipe.config);
+      setTaskModelResp(taskModel);
+      setTaskModelCfg(taskModel.config);
       setGuidelinesData(guides);
       // Initialize edits from current values
       const edits: Record<string, string> = {};
@@ -1037,6 +1063,32 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
                     Prioritise high-score events (sort by score desc before cap)
                   </label>
                 </div>
+                <div className="tok-opt-row">
+                  <label className="tok-opt-toggle">
+                    <input
+                      type="checkbox"
+                      checked={tokCfg.skip_zero_score_meta ?? true}
+                      onChange={(e) => setTokCfg({ ...tokCfg, skip_zero_score_meta: e.target.checked })}
+                    />
+                    Skip meta-analysis when all events scored 0 (O1)
+                  </label>
+                  <span className="form-hint">
+                    When every event in a window is routine (score 0), skip the LLM call entirely and write synthetic zero scores. Saves the most tokens for quiet systems.
+                  </span>
+                </div>
+                <div className="tok-opt-row">
+                  <label className="tok-opt-toggle">
+                    <input
+                      type="checkbox"
+                      checked={tokCfg.filter_zero_score_meta_events ?? true}
+                      onChange={(e) => setTokCfg({ ...tokCfg, filter_zero_score_meta_events: e.target.checked })}
+                    />
+                    Filter zero-score events from meta-analysis prompt (O2)
+                  </label>
+                  <span className="form-hint">
+                    Exclude events that scored 0 from the meta-analysis LLM context, reducing input tokens. Only active events (score &gt; 0) are sent.
+                  </span>
+                </div>
               </fieldset>
 
               {/* ── Actions ── */}
@@ -1290,6 +1342,39 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
                 </div>
               </fieldset>
 
+              {/* ── LLM Context Size ── */}
+              <fieldset className="tok-opt-group">
+                <legend>LLM Context Tuning</legend>
+                <span className="form-hint">
+                  Control how much historical context is included in the LLM meta-analysis prompt.
+                  More context provides better analysis but uses more tokens.
+                </span>
+                <div className="tok-opt-row">
+                  <label>Previous window summaries (context size)</label>
+                  <NumericInput
+                    min={1} max={20} step={1}
+                    value={metaCfg.context_window_size ?? 5}
+                    onChange={(v) => setMetaCfg({ ...metaCfg, context_window_size: v })}
+                    style={{ width: 90 }}
+                  />
+                  <span className="form-hint">
+                    Number of previous analysis window summaries included as LLM context. Default: 5.
+                  </span>
+                </div>
+                <div className="tok-opt-row">
+                  <label>Recurring lookback (days)</label>
+                  <NumericInput
+                    min={1} max={90} step={1}
+                    value={metaCfg.recurring_lookback_days ?? 14}
+                    onChange={(v) => setMetaCfg({ ...metaCfg, recurring_lookback_days: v })}
+                    style={{ width: 90 }}
+                  />
+                  <span className="form-hint">
+                    How far back (days) to check for recently resolved findings when detecting recurring issues. Default: 14.
+                  </span>
+                </div>
+              </fieldset>
+
               {/* ── Actions ── */}
               <div className="prompt-editor-actions">
                 <button
@@ -1343,6 +1428,287 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
                   }}
                 >
                   Reset to Defaults
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── Pipeline Settings ───────────────────────────── */}
+      <div className="ai-prompts-section">
+        <h3>Pipeline Settings</h3>
+        <p className="ai-config-desc">
+          Control the AI analysis pipeline scheduling, window size, and scoring parameters.
+          Changes take effect on the next pipeline cycle.
+        </p>
+
+        {pipeError && (
+          <div className="error-msg" role="alert">
+            {pipeError}
+            <button className="error-dismiss" onClick={() => setPipeError('')} aria-label="Dismiss">&times;</button>
+          </div>
+        )}
+        {pipeSuccess && (
+          <div className="success-msg" role="status">
+            {pipeSuccess}
+            <button className="error-dismiss" onClick={() => setPipeSuccess('')} aria-label="Dismiss">&times;</button>
+          </div>
+        )}
+
+        <div className="prompt-block">
+          <button
+            type="button"
+            className="prompt-toggle"
+            onClick={() => setShowPipeline((v) => !v)}
+          >
+            <span className={`prompt-chevron${showPipeline ? ' open' : ''}`}>&#9654;</span>
+            Pipeline Configuration
+          </button>
+
+          {showPipeline && pipeCfg && (
+            <div className="prompt-editor tok-opt-editor">
+              <fieldset className="tok-opt-group">
+                <legend>Scheduling</legend>
+                <span className="form-hint">
+                  How often the AI analysis pipeline runs and how large each analysis window is.
+                </span>
+                <div className="tok-opt-row">
+                  <label>Pipeline interval (minutes)</label>
+                  <NumericInput
+                    min={1} max={60} step={1}
+                    value={pipeCfg.pipeline_interval_minutes}
+                    onChange={(v) => setPipeCfg({ ...pipeCfg, pipeline_interval_minutes: v })}
+                    style={{ width: 90 }}
+                  />
+                  <span className="form-hint">
+                    How often the pipeline runs. Lower = more responsive but more LLM calls. Default: 5 min.
+                  </span>
+                </div>
+                <div className="tok-opt-row">
+                  <label>Analysis window (minutes)</label>
+                  <NumericInput
+                    min={1} max={60} step={1}
+                    value={pipeCfg.window_minutes}
+                    onChange={(v) => setPipeCfg({ ...pipeCfg, window_minutes: v })}
+                    style={{ width: 90 }}
+                  />
+                  <span className="form-hint">
+                    Size of each analysis window. Should match the pipeline interval. Default: 5 min.
+                  </span>
+                </div>
+              </fieldset>
+
+              <fieldset className="tok-opt-group">
+                <legend>Scoring &amp; Weights</legend>
+                <div className="tok-opt-row">
+                  <label>Scoring limit per run</label>
+                  <NumericInput
+                    min={10} max={5000} step={10}
+                    value={pipeCfg.scoring_limit_per_run}
+                    onChange={(v) => setPipeCfg({ ...pipeCfg, scoring_limit_per_run: v })}
+                    style={{ width: 90 }}
+                  />
+                  <span className="form-hint">
+                    Maximum number of events scored per pipeline run. Default: 500.
+                  </span>
+                </div>
+                <div className="tok-opt-row">
+                  <label>Meta-analysis weight (effective score)</label>
+                  <NumericInput
+                    min={0} max={1} step={0.05}
+                    value={pipeCfg.effective_score_meta_weight}
+                    onChange={(v) => setPipeCfg({ ...pipeCfg, effective_score_meta_weight: v })}
+                    style={{ width: 90 }}
+                  />
+                  <span className="form-hint">
+                    Weight of meta-analysis score in the blended effective score (0.0 = per-event only, 1.0 = meta only). Default: 0.7.
+                  </span>
+                </div>
+              </fieldset>
+
+              <div className="prompt-editor-actions">
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={savingPipe}
+                  onClick={async () => {
+                    setSavingPipe(true);
+                    setPipeError('');
+                    setPipeSuccess('');
+                    try {
+                      const updated = await updatePipelineConfig(pipeCfg);
+                      setPipelineCfgResp(updated);
+                      setPipeCfg(updated.config);
+                      setPipeSuccess('Pipeline settings saved. Takes effect on the next cycle.');
+                    } catch (err: unknown) {
+                      const msg = err instanceof Error ? err.message : String(err);
+                      if (msg.includes('Authentication')) { onAuthError(); return; }
+                      setPipeError(msg);
+                    } finally {
+                      setSavingPipe(false);
+                    }
+                  }}
+                >
+                  {savingPipe ? 'Saving...' : 'Save Settings'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-outline"
+                  disabled={savingPipe}
+                  onClick={async () => {
+                    if (!window.confirm('Reset pipeline settings to defaults?')) return;
+                    setSavingPipe(true);
+                    setPipeError('');
+                    setPipeSuccess('');
+                    try {
+                      const updated = await updatePipelineConfig(pipelineCfgResp?.defaults ?? {});
+                      setPipelineCfgResp(updated);
+                      setPipeCfg(updated.config);
+                      setPipeSuccess('Settings reset to defaults.');
+                    } catch (err: unknown) {
+                      const msg = err instanceof Error ? err.message : String(err);
+                      if (msg.includes('Authentication')) { onAuthError(); return; }
+                      setPipeError(msg);
+                    } finally {
+                      setSavingPipe(false);
+                    }
+                  }}
+                >
+                  Reset to Defaults
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── Per-Task Model Configuration (O3) ────────────── */}
+      <div className="ai-prompts-section">
+        <h3>Per-Task Model Overrides</h3>
+        <p className="ai-config-desc">
+          Optionally use different LLM models for different tasks. Leave empty to use the global model configured above.
+          Useful for cost optimization (e.g., cheaper model for scoring, better model for meta-analysis).
+        </p>
+
+        {taskModelError && (
+          <div className="error-msg" role="alert">
+            {taskModelError}
+            <button className="error-dismiss" onClick={() => setTaskModelError('')} aria-label="Dismiss">&times;</button>
+          </div>
+        )}
+        {taskModelSuccess && (
+          <div className="success-msg" role="status">
+            {taskModelSuccess}
+            <button className="error-dismiss" onClick={() => setTaskModelSuccess('')} aria-label="Dismiss">&times;</button>
+          </div>
+        )}
+
+        <div className="prompt-block">
+          <button
+            type="button"
+            className="prompt-toggle"
+            onClick={() => setShowTaskModel((v) => !v)}
+          >
+            <span className={`prompt-chevron${showTaskModel ? ' open' : ''}`}>&#9654;</span>
+            Task Model Settings
+          </button>
+
+          {showTaskModel && taskModelCfg && (
+            <div className="prompt-editor tok-opt-editor">
+              <fieldset className="tok-opt-group">
+                <legend>Model per Task</legend>
+                <span className="form-hint">
+                  Specify model names (e.g., <code>gpt-4o-mini</code>, <code>gpt-4o</code>).
+                  Leave empty to use the global model.
+                </span>
+                <div className="tok-opt-row">
+                  <label>Scoring model</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    value={taskModelCfg.scoring_model}
+                    onChange={(e) => setTaskModelCfg({ ...taskModelCfg, scoring_model: e.target.value })}
+                    placeholder="(use global model)"
+                    style={{ width: 220 }}
+                  />
+                  <span className="form-hint">Model for per-event scoring LLM calls.</span>
+                </div>
+                <div className="tok-opt-row">
+                  <label>Meta-analysis model</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    value={taskModelCfg.meta_model}
+                    onChange={(e) => setTaskModelCfg({ ...taskModelCfg, meta_model: e.target.value })}
+                    placeholder="(use global model)"
+                    style={{ width: 220 }}
+                  />
+                  <span className="form-hint">Model for meta-analysis / summary LLM calls.</span>
+                </div>
+                <div className="tok-opt-row">
+                  <label>Ask AI (RAG) model</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    value={taskModelCfg.rag_model}
+                    onChange={(e) => setTaskModelCfg({ ...taskModelCfg, rag_model: e.target.value })}
+                    placeholder="(use global model)"
+                    style={{ width: 220 }}
+                  />
+                  <span className="form-hint">Model for the "Ask AI" natural language query feature.</span>
+                </div>
+              </fieldset>
+
+              <div className="prompt-editor-actions">
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={savingTaskModel}
+                  onClick={async () => {
+                    setSavingTaskModel(true);
+                    setTaskModelError('');
+                    setTaskModelSuccess('');
+                    try {
+                      const updated = await updateTaskModelConfig(taskModelCfg);
+                      setTaskModelResp(updated);
+                      setTaskModelCfg(updated.config);
+                      setTaskModelSuccess('Per-task model settings saved. Takes effect on next pipeline run.');
+                    } catch (err: unknown) {
+                      const msg = err instanceof Error ? err.message : String(err);
+                      if (msg.includes('Authentication')) { onAuthError(); return; }
+                      setTaskModelError(msg);
+                    } finally {
+                      setSavingTaskModel(false);
+                    }
+                  }}
+                >
+                  {savingTaskModel ? 'Saving...' : 'Save Settings'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-outline"
+                  disabled={savingTaskModel}
+                  onClick={async () => {
+                    if (!window.confirm('Clear all per-task model overrides? All tasks will use the global model.')) return;
+                    setSavingTaskModel(true);
+                    setTaskModelError('');
+                    setTaskModelSuccess('');
+                    try {
+                      const updated = await updateTaskModelConfig({ scoring_model: '', meta_model: '', rag_model: '' });
+                      setTaskModelResp(updated);
+                      setTaskModelCfg(updated.config);
+                      setTaskModelSuccess('Per-task models cleared. Using global model for all tasks.');
+                    } catch (err: unknown) {
+                      const msg = err instanceof Error ? err.message : String(err);
+                      if (msg.includes('Authentication')) { onAuthError(); return; }
+                      setTaskModelError(msg);
+                    } finally {
+                      setSavingTaskModel(false);
+                    }
+                  }}
+                >
+                  Clear All Overrides
                 </button>
               </div>
             </div>

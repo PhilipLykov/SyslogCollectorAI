@@ -348,6 +348,7 @@ RESOLUTION RULES (STRICT — read carefully):
   - Finding: "Service nginx failing health checks"
     Resolution events [7] and [9]: "nginx started", "health check OK"
     -> {"index": 1, "evidence": "Events [7] and [9] confirm nginx recovered", "event_refs": [7, 9]}
+- CRITICAL SEVERITY RULE: Events with ERROR, CRITICAL, ALERT, or EMERGENCY severity can NEVER be used as resolution proof. An error-severity event describes a PROBLEM, not a SOLUTION. Only events indicating SUCCESS, RECOVERY, or NORMAL STATE (typically info/notice/warning severity) can resolve a finding. If your only proof events are error-severity, the finding is STILL ACTIVE.
 - Examples of INVALID resolutions (the proof event is the SAME problem — use still_active_indices instead):
   - Finding: "Switch 2's power stack lost redundancy"
     Event [1]: "Switch 2's power stack lost redundancy and is now operating in power sharing mode"
@@ -355,6 +356,9 @@ RESOLUTION RULES (STRICT — read carefully):
   - Finding: "NTP sync failure on core router"
     Event [3]: "NTP sync failed on 10.0.0.1"
     -> This CONFIRMS the issue is still happening. Add to still_active_indices: [0]
+  - Finding: "Persistent TCP connection errors to IP 192.168.30.222"
+    Event [2] (severity=error): "[ERROR] Reconnection failed: connect EHOSTUNREACH 192.168.30.222:4403"
+    -> This is an ERROR event confirming the SAME problem is ongoing. Error events can NEVER resolve findings. Add to still_active_indices.
 - Each resolved_indices entry MUST include an "event_refs" array with at least one event number. Resolutions without event_refs will be REJECTED by the system.
 - Absence of the issue in the current window is NOT evidence of resolution. Just because "port 11 disabled" stopped appearing does NOT mean port 11 was re-enabled. Only resolve when you see the POSITIVE counter-event.
 - There is NO time-based auto-resolution in this system. A finding stays open until proven fixed by a specific event. This is by design.
@@ -430,7 +434,7 @@ export class OpenAiAdapter implements LlmAdapter {
     events: Array<{ message: string; severity?: string; host?: string; program?: string }>,
     systemDescription: string,
     sourceLabels: string[],
-    options?: { systemPrompt?: string },
+    options?: { systemPrompt?: string; modelOverride?: string },
   ): Promise<ScoreEventsResult> {
     const sections: string[] = [];
 
@@ -459,7 +463,7 @@ export class OpenAiAdapter implements LlmAdapter {
     let scores: ScoreResult[];
     let usage: LlmUsageInfo;
     try {
-      const response = await this.chatCompletion(prompt, userContent);
+      const response = await this.chatCompletion(prompt, userContent, options?.modelOverride);
       usage = response.usage;
 
       const jsonContent = extractJson(response.content);
@@ -499,7 +503,7 @@ export class OpenAiAdapter implements LlmAdapter {
     systemDescription: string,
     sourceLabels: string[],
     context?: MetaAnalysisContext,
-    options?: { systemPrompt?: string },
+    options?: { systemPrompt?: string; modelOverride?: string },
   ): Promise<MetaAnalyzeResult> {
     const sections: string[] = [];
 
@@ -594,7 +598,7 @@ export class OpenAiAdapter implements LlmAdapter {
 
     const userContent = sections.join('\n');
     const prompt = options?.systemPrompt ?? DEFAULT_META_SYSTEM_PROMPT;
-    const response = await this.chatCompletion(prompt, userContent);
+    const response = await this.chatCompletion(prompt, userContent, options?.modelOverride);
 
     try {
       const jsonContent = extractJson(response.content);
@@ -688,9 +692,11 @@ export class OpenAiAdapter implements LlmAdapter {
   private async chatCompletion(
     systemPrompt: string,
     userContent: string,
+    modelOverride?: string,
   ): Promise<{ content: string; usage: LlmUsageInfo }> {
+    const effectiveModel = (modelOverride && modelOverride.trim()) ? modelOverride.trim() : this.model;
     const body = {
-      model: this.model,
+      model: effectiveModel,
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userContent },
@@ -719,7 +725,7 @@ export class OpenAiAdapter implements LlmAdapter {
       console.warn(`[${localTimestamp()}] LLM returned empty content (model=${this.model})`);
     }
     const usage: LlmUsageInfo = {
-      model: this.model,
+      model: effectiveModel,
       token_input: data.usage?.prompt_tokens ?? 0,
       token_output: data.usage?.completion_tokens ?? 0,
       request_count: 1,

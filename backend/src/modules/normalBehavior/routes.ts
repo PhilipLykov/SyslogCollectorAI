@@ -17,7 +17,8 @@ const DEFAULT_W_META = 0.7;
 
 /**
  * Retroactively apply a new normal-behavior template:
- *  1. Zero out event_scores for events matching the pattern (last 24h)
+ *  1. Zero out event_scores for events matching the pattern within the
+ *     configured score display window (default 7 days, from app_config)
  *  2. Recalculate effective_scores for affected windows
  *
  * This ensures the dashboard reflects the change immediately, rather than
@@ -28,13 +29,26 @@ async function retroactivelyApplyTemplate(
   patternRegex: string,
   systemId: string | null,
 ): Promise<{ zeroedEvents: number; updatedWindows: number }> {
-  const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  // Use the configured score display window (default 7 days) instead of
+  // a hardcoded 24h lookback. This ensures that events within the full
+  // dashboard display window get their scores zeroed immediately.
+  let windowDays = 7; // default
+  try {
+    const cfgRow = await db('app_config').where({ key: 'dashboard_config' }).first('value');
+    if (cfgRow) {
+      const raw = typeof cfgRow.value === 'string' ? JSON.parse(cfgRow.value) : cfgRow.value;
+      const d = Number(raw?.score_display_window_days);
+      if (Number.isFinite(d) && d >= 1 && d <= 90) windowDays = d;
+    }
+  } catch { /* use default */ }
+
+  const sinceWindow = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000).toISOString();
 
   // 1. Zero out event_scores for matching events (PostgreSQL ~* = case-insensitive regex).
   // Cast events.id (UUID) to text — event_scores.event_id is VARCHAR(255).
   const subquery = db('events')
     .select(db.raw('id::text'))
-    .where('timestamp', '>=', since24h)
+    .where('timestamp', '>=', sinceWindow)
     .whereRaw('message ~* ?', [patternRegex]);
 
   if (systemId) {
@@ -52,7 +66,7 @@ async function retroactivelyApplyTemplate(
 
   // 2. Recalculate effective_scores for recent windows
   const windowQuery = db('windows')
-    .where('to_ts', '>=', since24h)
+    .where('to_ts', '>=', sinceWindow)
     .select('id', 'system_id', 'from_ts', 'to_ts');
 
   if (systemId) {
@@ -116,7 +130,7 @@ async function retroactivelyApplyTemplate(
   }
 
   console.log(
-    `[${localTimestamp()}] Retroactive normal-behavior update: zeroed ${zeroedEvents} event_scores, recalculated ${updatedWindows} windows`,
+    `[${localTimestamp()}] Retroactive normal-behavior update: zeroed ${zeroedEvents} event_scores, recalculated ${updatedWindows} windows (lookback=${windowDays}d)`,
   );
 
   return { zeroedEvents, updatedWindows };

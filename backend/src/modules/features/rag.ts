@@ -1,7 +1,9 @@
+import { v4 as uuidv4 } from 'uuid';
 import type { Knex } from 'knex';
 import { localTimestamp } from '../../config/index.js';
-import { resolveAiConfig, resolveCustomPrompts } from '../llm/aiConfig.js';
+import { resolveAiConfig, resolveCustomPrompts, resolveTaskModels } from '../llm/aiConfig.js';
 import { DEFAULT_RAG_SYSTEM_PROMPT, humanAge } from '../llm/adapter.js';
+import { estimateCost } from '../llm/pricing.js';
 
 /**
  * RAG-style natural language query endpoint.
@@ -262,6 +264,10 @@ export async function askQuestion(
   const customPrompts = await resolveCustomPrompts(db);
   const systemPrompt = customPrompts.ragSystemPrompt ?? DEFAULT_RAG_SYSTEM_PROMPT;
 
+  // Resolve per-task model override for RAG
+  const taskModels = await resolveTaskModels(db);
+  const effectiveModel = (taskModels.rag_model && taskModels.rag_model.trim()) ? taskModels.rag_model.trim() : model;
+
   // Place question in a clearly delimited block to reduce injection surface
   const userContent = `<context>\n${context}\n</context>\n\n<question>\n${sanitized}\n</question>`;
 
@@ -274,7 +280,7 @@ export async function askQuestion(
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model,
+        model: effectiveModel,
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userContent },
@@ -304,9 +310,30 @@ export async function askQuestion(
   }
   const answer = data.choices?.[0]?.message?.content ?? 'Unable to generate an answer.';
 
+  // ── O6: Track RAG LLM usage in llm_usage table ───────────
+  try {
+    const usageData = data.usage;
+    const tokenInput = Number(usageData?.prompt_tokens ?? 0);
+    const tokenOutput = Number(usageData?.completion_tokens ?? 0);
+    const cost = estimateCost(tokenInput, tokenOutput, effectiveModel);
+    await db('llm_usage').insert({
+      id: uuidv4(),
+      system_id: options?.systemId ?? null,
+      run_type: 'rag',
+      model: effectiveModel,
+      token_input: tokenInput,
+      token_output: tokenOutput,
+      request_count: 1,
+      cost_estimate: cost,
+    });
+  } catch (trackErr: any) {
+    console.error(`[${localTimestamp()}] RAG usage tracking failed: ${trackErr.message}`);
+    // Don't fail the request if tracking fails
+  }
+
   console.log(
     `[${localTimestamp()}] RAG query answered ` +
-    `(findings=${findingsRows.length}, summaries=${sampledMetaRows.length}/${metaRows.length})`,
+    `(findings=${findingsRows.length}, summaries=${sampledMetaRows.length}/${metaRows.length}, model=${effectiveModel})`,
   );
 
   return { answer, context_used: totalContextItems };

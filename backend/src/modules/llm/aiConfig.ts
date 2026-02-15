@@ -81,6 +81,49 @@ export function invalidateAiConfigCache(): void {
   _promptCacheTs = 0;
   _guideCache = null;
   _guideCacheTs = 0;
+  _taskModelCache = null;
+  _taskModelCacheTs = 0;
+}
+
+// ── Per-task model overrides ──────────────────────────────────
+
+export interface TaskModelConfig {
+  /** Model for per-event scoring. Empty/null = use global model. */
+  scoring_model: string;
+  /** Model for meta-analysis. Empty/null = use global model. */
+  meta_model: string;
+  /** Model for RAG / Ask AI. Empty/null = use global model. */
+  rag_model: string;
+}
+
+let _taskModelCache: TaskModelConfig | null = null;
+let _taskModelCacheTs = 0;
+
+/**
+ * Resolve per-task model overrides from app_config.
+ * Returns empty strings for unset models (= use global model).
+ */
+export async function resolveTaskModels(db: Knex): Promise<TaskModelConfig> {
+  const now = Date.now();
+  if (_taskModelCache && now - _taskModelCacheTs < CACHE_TTL_MS) return _taskModelCache;
+
+  const DEFAULTS: TaskModelConfig = { scoring_model: '', meta_model: '', rag_model: '' };
+  try {
+    const row = await db('app_config').where({ key: 'task_model_config' }).first('value');
+    if (!row) {
+      _taskModelCache = DEFAULTS;
+      _taskModelCacheTs = now;
+      return DEFAULTS;
+    }
+    const raw = typeof row.value === 'string' ? JSON.parse(row.value) : row.value;
+    _taskModelCache = { ...DEFAULTS, ...(raw && typeof raw === 'object' ? raw as Partial<TaskModelConfig> : {}) };
+    _taskModelCacheTs = now;
+    return _taskModelCache!;
+  } catch {
+    _taskModelCache = DEFAULTS;
+    _taskModelCacheTs = now;
+    return DEFAULTS;
+  }
 }
 
 // ── Custom system prompt resolution ─────────────────────────

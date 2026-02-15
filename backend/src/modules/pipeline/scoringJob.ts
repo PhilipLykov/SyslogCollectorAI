@@ -5,7 +5,7 @@ import { extractTemplatesAndDedup, type TemplateRepresentative } from './dedup.j
 import { type LlmAdapter, type ScoreResult } from '../llm/adapter.js';
 import { estimateCost } from '../llm/pricing.js';
 import { CRITERIA } from '../../types/index.js';
-import { resolveCustomPrompts, resolveCriterionGuidelines } from '../llm/aiConfig.js';
+import { resolveCustomPrompts, resolveCriterionGuidelines, resolveTaskModels } from '../llm/aiConfig.js';
 import { buildScoringPrompt } from '../llm/adapter.js';
 import { loadPrivacyFilterConfig, filterEventForLlm } from '../llm/llmPrivacyFilter.js';
 import { getDefaultEventSource, getEventSource } from '../../services/eventSourceFactory.js';
@@ -25,11 +25,15 @@ export interface TokenOptimizationConfig {
   low_score_min_scorings: number;
   meta_max_events: number;
   meta_prioritize_high_scores: boolean;
+  /** O1: Skip meta-analysis LLM call when all events in window scored 0. */
+  skip_zero_score_meta: boolean;
+  /** O2: Filter zero-score events from meta-analysis prompt to save tokens. */
+  filter_zero_score_meta_events: boolean;
 }
 
 const DEFAULT_TOKEN_OPT: TokenOptimizationConfig = {
   score_cache_enabled: true,
-  score_cache_ttl_minutes: 60,
+  score_cache_ttl_minutes: 360,
   severity_filter_enabled: false,
   severity_skip_levels: ['debug'],
   severity_default_score: 0,
@@ -40,6 +44,8 @@ const DEFAULT_TOKEN_OPT: TokenOptimizationConfig = {
   low_score_min_scorings: 5,
   meta_max_events: 200,
   meta_prioritize_high_scores: true,
+  skip_zero_score_meta: true,
+  filter_zero_score_meta_events: true,
 };
 
 /** Load token optimization config from app_config, with defaults. */
@@ -347,12 +353,18 @@ export async function runPerEventScoringJob(
           return filterEventForLlm(raw, privacyConfig);
         });
 
+        // Resolve per-task model override for scoring
+        const taskModels = await resolveTaskModels(db);
+
         // Call LLM
         const { scores, usage } = await llm.scoreEvents(
           eventsForLlm,
           system?.description ?? '',
           sourceLabels,
-          { systemPrompt: effectiveScoringPrompt },
+          {
+            systemPrompt: effectiveScoringPrompt,
+            modelOverride: taskModels.scoring_model || undefined,
+          },
         );
 
         totalTokenInput += usage.token_input;

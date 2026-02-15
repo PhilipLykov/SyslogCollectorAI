@@ -194,6 +194,89 @@ All endpoints require authentication via `Authorization: Bearer <session_token>`
 
 ---
 
+## LLM Cost Optimization
+
+One of the most common concerns when deploying AI-powered log analysis is LLM API cost. LogSentinel AI implements **16 independent optimization techniques** that work together to reduce token usage by up to 80-95% compared to naive per-event analysis — without sacrificing detection quality. All optimizations are **configurable through the web UI** and come with sensible defaults that work out of the box.
+
+### How It Works
+
+```
+  Raw Events (thousands/min)
+         │
+         ▼
+  ┌──────────────────────────┐
+  │  1. Template Dedup       │── Groups identical message patterns (e.g., 500 identical
+  │                          │   "link up/down" events become 1 template with count=500)
+  └──────────┬───────────────┘
+             ▼
+  ┌──────────────────────────┐
+  │  2. Pre-Filters          │── Severity filter, normal-behavior filter, privacy filter
+  │                          │   skip known-routine events without any LLM call
+  └──────────┬───────────────┘
+             ▼
+  ┌──────────────────────────┐
+  │  3. Score Caching        │── Previously scored templates reuse cached results
+  │     (TTL: 6 hours)       │   for up to 6 hours (configurable)
+  └──────────┬───────────────┘
+             ▼
+  ┌──────────────────────────┐
+  │  4. Batched LLM Calls    │── Remaining templates sent in batches of 20
+  │     (20 per call)        │   with truncated messages (512 chars max)
+  └──────────┬───────────────┘
+             ▼
+  ┌──────────────────────────┐
+  │  5. Smart Meta-Analysis  │── Zero-score windows skip LLM entirely;
+  │                          │   zero-score events filtered from prompt
+  └──────────┬───────────────┘
+             ▼
+     AI Scores & Findings
+```
+
+### Optimization Techniques
+
+| # | Technique | Description | Default | UI Configurable |
+|---|-----------|-------------|---------|-----------------|
+| 1 | **Template Deduplication** | Groups events by message pattern (template extraction). Instead of scoring 500 identical "link up" events, scores 1 template with count=500. This alone typically reduces LLM calls by 90%+ for repetitive log sources. | Always on | — |
+| 2 | **Score Caching** | Caches LLM scores per template. If the same message pattern was scored within the TTL window, the cached result is reused. Eliminates redundant calls across pipeline runs. | On (6h TTL) | Yes |
+| 3 | **Normal Behavior Filtering** | Events matching user-defined "Mark as Normal" templates are automatically scored at 0 without any LLM call. Operators teach the system what is routine, permanently removing noise from analysis. | On (when templates exist) | Yes |
+| 4 | **Severity Pre-Filter** | Events at specified severity levels (e.g., debug) are automatically scored at 0 without LLM calls. Useful for noisy systems that produce thousands of low-value debug events. | Off | Yes |
+| 5 | **Low-Score Auto-Skip** | Templates that have been consistently scored near-zero over multiple pipeline runs are automatically scored at 0. The LLM "teaches" the system what is noise, and the system stops asking. | Off | Yes |
+| 6 | **Message Truncation** | Event messages are truncated to a configurable maximum length before LLM submission. The diagnostic value is almost always in the first few hundred characters; long stack traces waste tokens. | On (512 chars) | Yes |
+| 7 | **Batch Sizing** | Multiple templates are grouped into a single LLM API call. The system prompt is sent once per batch rather than once per event, reducing overhead. | On (20/batch) | Yes |
+| 8 | **Zero-Score Window Skip (O1)** | When every event in an analysis window scored 0 during per-event scoring, the meta-analysis LLM call is skipped entirely. A synthetic "no issues" result is written instead. Saves the most for quiet systems. | On | Yes |
+| 9 | **Zero-Score Event Filter (O2)** | Events that scored 0 are excluded from the meta-analysis prompt, reducing input tokens. Only events with non-zero scores are sent for higher-level analysis. | On | Yes |
+| 10 | **High-Score Prioritization** | Events are sorted by score (descending) before the meta-analysis event cap is applied. This ensures the most important events are always included, even when the cap is reached. | On | Yes |
+| 11 | **Meta-Analysis Event Cap** | Hard limit on events sent to meta-analysis per window. Prevents token explosion on very active systems while ensuring analysis quality via high-score prioritization. | On (200 events) | Yes |
+| 12 | **Per-Task Model Selection** | Use different models for different tasks: a cheaper model (e.g., `gpt-4o-mini`) for per-event scoring and a more capable model (e.g., `gpt-4o`) for meta-analysis summaries. Optimizes cost-to-quality ratio per task. | Off (uses global model) | Yes |
+| 13 | **Configurable Pipeline Interval** | Adjust how frequently the analysis pipeline runs. Longer intervals reduce LLM calls at the cost of slower detection. For low-urgency systems, running every 15-30 minutes instead of 5 can cut costs significantly. | On (5 min) | Yes |
+| 14 | **Scoring Limit Per Run** | Caps the number of events scored per pipeline cycle. Prevents budget spikes during log storms while ensuring steady analysis throughput. | On (500/run) | Yes |
+| 15 | **Privacy Filtering** | Strips or masks PII fields (IPs, emails, paths, credentials) before LLM submission. Beyond privacy compliance, this reduces token count by removing non-diagnostic data from prompts. | Off | Yes |
+| 16 | **Configurable Context Window** | Controls how many previous analysis summaries are included as LLM context. Fewer summaries = fewer input tokens. Adjustable based on how much historical context your analysis needs. | On (5 windows) | Yes |
+
+### Cost Tracking
+
+LogSentinel AI tracks every LLM API call with:
+- **Per-request metrics**: model used, input/output tokens, estimated cost (USD)
+- **Per-system breakdown**: see which monitored systems consume the most tokens
+- **Daily usage charts**: visualize spending trends over time
+- **Task-level tracking**: separate tracking for scoring, meta-analysis, and RAG queries
+
+All usage data is accessible through the **Settings > LLM Usage** dashboard in the web UI.
+
+### Typical Cost Profile
+
+With default settings and a moderate log volume (~10,000 events/day across 5 systems), users typically see:
+
+| Model | Estimated Monthly Cost |
+|-------|----------------------|
+| `gpt-4o-mini` (recommended) | $2 – $10 |
+| `gpt-4o` | $15 – $60 |
+| Self-hosted (Ollama/vLLM) | $0 (hardware only) |
+
+> These estimates assume template deduplication reduces unique messages to ~5-10% of raw volume, and score caching eliminates ~70% of repeat scoring calls. Actual costs vary based on log volume, message diversity, and optimization settings.
+
+---
+
 ## Project Documentation
 
 | Document | Contents |

@@ -648,7 +648,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
 
   const TOKEN_OPT_DEFAULTS = {
     score_cache_enabled: true,
-    score_cache_ttl_minutes: 60,
+    score_cache_ttl_minutes: 360,
     severity_filter_enabled: false,
     severity_skip_levels: ['debug'],
     severity_default_score: 0,
@@ -659,6 +659,10 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
     low_score_min_scorings: 5,
     meta_max_events: 200,
     meta_prioritize_high_scores: true,
+    // O1: Skip LLM meta-analysis entirely when all events in window scored 0
+    skip_zero_score_meta: true,
+    // O2: Exclude zero-score events from meta-analysis prompt to reduce tokens
+    filter_zero_score_meta_events: true,
   };
 
   /** GET /api/v1/token-optimization — return current config with defaults. */
@@ -827,11 +831,15 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
   const META_CONFIG_DEFAULTS = {
     finding_dedup_enabled: true,
     finding_dedup_threshold: 0.6,
-    max_new_findings_per_window: 5,
-    auto_resolve_after_misses: 5,
-    severity_decay_enabled: true,
+    max_new_findings_per_window: 3,
+    auto_resolve_after_misses: 0,
+    severity_decay_enabled: false,
     severity_decay_after_occurrences: 10,
-    max_open_findings_per_system: 25,
+    max_open_findings_per_system: 50,
+    // Number of previous window summaries included as LLM context
+    context_window_size: 5,
+    // How far back (days) to check for recently resolved findings when detecting recurring issues
+    recurring_lookback_days: 14,
   };
 
   /** GET /api/v1/meta-analysis-config — return current config with defaults and stats. */
@@ -914,6 +922,18 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
         const v = Number(body.max_open_findings_per_system);
         if (!Number.isFinite(v) || v < 5 || v > 200) {
           return reply.code(400).send({ error: 'max_open_findings_per_system must be 5–200.' });
+        }
+      }
+      if (body.context_window_size !== undefined) {
+        const v = Number(body.context_window_size);
+        if (!Number.isFinite(v) || v < 1 || v > 20) {
+          return reply.code(400).send({ error: 'context_window_size must be 1–20.' });
+        }
+      }
+      if (body.recurring_lookback_days !== undefined) {
+        const v = Number(body.recurring_lookback_days);
+        if (!Number.isFinite(v) || v < 1 || v > 90) {
+          return reply.code(400).send({ error: 'recurring_lookback_days must be 1–90.' });
         }
       }
 
@@ -1031,6 +1051,189 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
         return reply.send({ config: current, defaults: DASHBOARD_CONFIG_DEFAULTS });
       } catch (err: any) {
         app.log.error(`[${localTimestamp()}] Failed to update dashboard config: ${err.message}`);
+        return reply.code(500).send({ error: 'Failed to update config.' });
+      }
+    },
+  );
+
+  // ── Pipeline Config (interval, window size, scoring limit, meta weight) ──
+
+  const PIPELINE_CONFIG_DEFAULTS: Record<string, unknown> = {
+    pipeline_interval_minutes: 5,
+    window_minutes: 5,
+    scoring_limit_per_run: 500,
+    effective_score_meta_weight: 0.7,
+  };
+
+  /** GET /api/v1/pipeline-config — return current pipeline config with defaults. */
+  app.get(
+    '/api/v1/pipeline-config',
+    { preHandler: requireAuth(PERMISSIONS.AI_CONFIG_VIEW) },
+    async (_req, reply) => {
+      try {
+        const row = await db('app_config').where({ key: 'pipeline_config' }).first('value');
+        let parsed: Record<string, unknown> = {};
+        if (row) {
+          const raw = typeof row.value === 'string' ? JSON.parse(row.value) : row.value;
+          if (raw && typeof raw === 'object') parsed = raw as Record<string, unknown>;
+        }
+        const config = { ...PIPELINE_CONFIG_DEFAULTS, ...parsed };
+        return reply.send({ config, defaults: PIPELINE_CONFIG_DEFAULTS });
+      } catch (err: any) {
+        app.log.error(`[${localTimestamp()}] Failed to fetch pipeline config: ${err.message}`);
+        return reply.code(500).send({ error: 'Failed to fetch config.' });
+      }
+    },
+  );
+
+  /** PUT /api/v1/pipeline-config — update pipeline config with validation. */
+  app.put(
+    '/api/v1/pipeline-config',
+    { preHandler: requireAuth(PERMISSIONS.AI_CONFIG_MANAGE) },
+    async (request, reply) => {
+      const body = (request.body as any) ?? {};
+
+      if (body.pipeline_interval_minutes !== undefined) {
+        const v = Number(body.pipeline_interval_minutes);
+        if (!Number.isFinite(v) || v < 1 || v > 60) {
+          return reply.code(400).send({ error: 'pipeline_interval_minutes must be 1–60.' });
+        }
+      }
+      if (body.window_minutes !== undefined) {
+        const v = Number(body.window_minutes);
+        if (!Number.isFinite(v) || v < 1 || v > 60) {
+          return reply.code(400).send({ error: 'window_minutes must be 1–60.' });
+        }
+      }
+      if (body.scoring_limit_per_run !== undefined) {
+        const v = Number(body.scoring_limit_per_run);
+        if (!Number.isFinite(v) || v < 10 || v > 5000) {
+          return reply.code(400).send({ error: 'scoring_limit_per_run must be 10–5000.' });
+        }
+      }
+      if (body.effective_score_meta_weight !== undefined) {
+        const v = Number(body.effective_score_meta_weight);
+        if (!Number.isFinite(v) || v < 0 || v > 1) {
+          return reply.code(400).send({ error: 'effective_score_meta_weight must be 0.0–1.0.' });
+        }
+      }
+
+      try {
+        const existing = await db('app_config').where({ key: 'pipeline_config' }).first('value');
+        let current: Record<string, unknown> = { ...PIPELINE_CONFIG_DEFAULTS };
+        if (existing) {
+          const raw = typeof existing.value === 'string' ? JSON.parse(existing.value) : existing.value;
+          if (raw && typeof raw === 'object') current = { ...current, ...(raw as Record<string, unknown>) };
+        }
+
+        const allowedKeys = Object.keys(PIPELINE_CONFIG_DEFAULTS);
+        for (const key of allowedKeys) {
+          if (body[key] !== undefined) {
+            current[key] = body[key];
+          }
+        }
+
+        await db.raw(`
+          INSERT INTO app_config (key, value) VALUES ('pipeline_config', ?::jsonb)
+          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        `, [JSON.stringify(current)]);
+
+        await writeAuditLog(db, {
+          action: 'config_update',
+          resource_type: 'pipeline_config',
+          ip: request.ip,
+          user_id: request.currentUser?.id,
+          session_id: request.currentSession?.id,
+        });
+
+        app.log.info(`[${localTimestamp()}] Pipeline config updated`);
+
+        return reply.send({ config: current, defaults: PIPELINE_CONFIG_DEFAULTS });
+      } catch (err: any) {
+        app.log.error(`[${localTimestamp()}] Failed to update pipeline config: ${err.message}`);
+        return reply.code(500).send({ error: 'Failed to update config.' });
+      }
+    },
+  );
+
+  // ── Per-Task Model Config (O3: two-tier model) ────────────
+
+  const TASK_MODEL_DEFAULTS: Record<string, string> = {
+    scoring_model: '',
+    meta_model: '',
+    rag_model: '',
+  };
+
+  /** GET /api/v1/task-model-config — return per-task model overrides. */
+  app.get(
+    '/api/v1/task-model-config',
+    { preHandler: requireAuth(PERMISSIONS.AI_CONFIG_VIEW) },
+    async (_req, reply) => {
+      try {
+        const row = await db('app_config').where({ key: 'task_model_config' }).first('value');
+        let parsed: Record<string, unknown> = {};
+        if (row) {
+          const raw = typeof row.value === 'string' ? JSON.parse(row.value) : row.value;
+          if (raw && typeof raw === 'object') parsed = raw as Record<string, unknown>;
+        }
+        const config = { ...TASK_MODEL_DEFAULTS, ...parsed };
+        return reply.send({ config, defaults: TASK_MODEL_DEFAULTS });
+      } catch (err: any) {
+        app.log.error(`[${localTimestamp()}] Failed to fetch task-model config: ${err.message}`);
+        return reply.code(500).send({ error: 'Failed to fetch config.' });
+      }
+    },
+  );
+
+  /** PUT /api/v1/task-model-config — update per-task model overrides. */
+  app.put(
+    '/api/v1/task-model-config',
+    { preHandler: requireAuth(PERMISSIONS.AI_CONFIG_MANAGE) },
+    async (request, reply) => {
+      const body = (request.body as any) ?? {};
+
+      // Validate: each field must be a string (model name) or empty string
+      for (const key of ['scoring_model', 'meta_model', 'rag_model']) {
+        if (body[key] !== undefined) {
+          if (typeof body[key] !== 'string' || body[key].length > 128) {
+            return reply.code(400).send({ error: `${key} must be a string up to 128 characters.` });
+          }
+        }
+      }
+
+      try {
+        const existing = await db('app_config').where({ key: 'task_model_config' }).first('value');
+        let current: Record<string, unknown> = { ...TASK_MODEL_DEFAULTS };
+        if (existing) {
+          const raw = typeof existing.value === 'string' ? JSON.parse(existing.value) : existing.value;
+          if (raw && typeof raw === 'object') current = { ...current, ...(raw as Record<string, unknown>) };
+        }
+
+        const allowedKeys = Object.keys(TASK_MODEL_DEFAULTS);
+        for (const key of allowedKeys) {
+          if (body[key] !== undefined) {
+            current[key] = body[key];
+          }
+        }
+
+        await db.raw(`
+          INSERT INTO app_config (key, value) VALUES ('task_model_config', ?::jsonb)
+          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        `, [JSON.stringify(current)]);
+
+        await writeAuditLog(db, {
+          action: 'config_update',
+          resource_type: 'task_model_config',
+          ip: request.ip,
+          user_id: request.currentUser?.id,
+          session_id: request.currentSession?.id,
+        });
+
+        app.log.info(`[${localTimestamp()}] Task model config updated`);
+
+        return reply.send({ config: current, defaults: TASK_MODEL_DEFAULTS });
+      } catch (err: any) {
+        app.log.error(`[${localTimestamp()}] Failed to update task-model config: ${err.message}`);
         return reply.code(500).send({ error: 'Failed to update config.' });
       }
     },

@@ -8,7 +8,7 @@ import {
 } from '../llm/adapter.js';
 import { estimateCost } from '../llm/pricing.js';
 import { CRITERIA } from '../../types/index.js';
-import { resolveCustomPrompts } from '../llm/aiConfig.js';
+import { resolveCustomPrompts, resolveTaskModels } from '../llm/aiConfig.js';
 import { loadTokenOptConfig } from './scoringJob.js';
 import {
   deduplicateFindings,
@@ -251,6 +251,65 @@ export async function metaAnalyzeWindow(
     }
   }
 
+  // ── O1: Skip LLM meta-analysis when ALL events scored 0 ──
+  // If every event has max score = 0, the window is entirely routine.
+  // Write synthetic zero meta result and skip the expensive LLM call.
+  const skipZeroScoreMeta = tokenOpt.skip_zero_score_meta !== false; // default true
+  if (skipZeroScoreMeta) {
+    let allZero = true;
+    for (const [, scores] of scoreMap) {
+      const maxScore = Math.max(
+        scores.it_security, scores.performance_degradation, scores.failure_prediction,
+        scores.anomaly, scores.compliance_audit, scores.operational_risk,
+      );
+      if (maxScore > 0) { allZero = false; break; }
+    }
+    // Also check events without scores (they might not have been scored yet)
+    if (allZero && scoreMap.size > 0) {
+      console.log(
+        `[${localTimestamp()}] Meta-analyze: all ${events.length} events scored 0 in window ${windowId}, ` +
+        `skipping LLM call (O1 optimization)`,
+      );
+      const nowIso = new Date().toISOString();
+      for (const criterion of CRITERIA) {
+        await db.raw(`
+          INSERT INTO effective_scores (window_id, system_id, criterion_id, effective_value, meta_score, max_event_score, updated_at)
+          VALUES (?, ?, ?, 0, 0, 0, ?)
+          ON CONFLICT (window_id, system_id, criterion_id)
+          DO UPDATE SET effective_value = 0,
+                        meta_score = 0,
+                        max_event_score = 0,
+                        updated_at = EXCLUDED.updated_at
+        `, [windowId, system.id, criterion.id, nowIso]);
+      }
+
+      const zeroMetaScores: Record<string, number> = {};
+      for (const c of CRITERIA) { zeroMetaScores[c.slug] = 0; }
+      await db('meta_results').insert({
+        id: uuidv4(),
+        window_id: windowId,
+        meta_scores: JSON.stringify(zeroMetaScores),
+        summary: 'All events in this window scored as routine. No significant issues detected.',
+        findings: JSON.stringify([]),
+        recommended_action: null,
+        key_event_ids: null,
+      });
+
+      // Still process finding lifecycle (check dormancy for open findings)
+      // but skip the LLM call and finding creation
+      const context = await buildMetaContext(db, system.id, windowId, metaCfg.context_window_size ?? DEFAULT_CONTEXT_WINDOW_SIZE);
+      if (context.openFindings.length > 0) {
+        // Increment consecutive_misses for all open findings (none were seen)
+        await db('findings')
+          .where({ system_id: system.id })
+          .whereIn('status', ['open', 'acknowledged'])
+          .increment('consecutive_misses', 1);
+      }
+
+      return;
+    }
+  }
+
   // Deduplicate by template for LLM input — also track representative event ID
   const templateGroups = new Map<string, {
     message: string; severity?: string; count: number;
@@ -276,11 +335,13 @@ export async function metaAnalyzeWindow(
   const templateGroupValues = Array.from(templateGroups.values());
   const eventIndexToId = new Map<number, string>(); // 1-indexed → event UUID
   const eventIndexToMessage = new Map<number, string>(); // 1-indexed → event message
+  const eventIndexToSeverity = new Map<number, string>(); // 1-indexed → event severity
 
   let eventsForLlm = templateGroupValues.map((g, i) => {
-    // Track mapping: LLM event number (1-indexed) → representative event ID + message
+    // Track mapping: LLM event number (1-indexed) → representative event ID + message + severity
     eventIndexToId.set(i + 1, g.representativeEventId);
     eventIndexToMessage.set(i + 1, g.message);
+    eventIndexToSeverity.set(i + 1, g.severity ?? '');
 
     // In context_only mode, annotate acknowledged events with the ack prompt
     if (g.acknowledged && ackMode === 'context_only') {
@@ -299,6 +360,49 @@ export async function metaAnalyzeWindow(
     };
   });
 
+  // ── O2: Filter zero-score events from meta-analysis prompt ─
+  // Reduces input tokens by excluding events the scoring stage marked as routine.
+  // Only applied when there are enough events with non-zero scores to form useful context.
+  const filterZeroScoreMeta = tokenOpt.filter_zero_score_meta_events !== false; // default true
+  if (filterZeroScoreMeta && eventsForLlm.length > 5) {
+    const safeMax = (s: typeof eventsForLlm[0]['scores']) => {
+      if (!s) return 0;
+      return Math.max(
+        Number(s.it_security) || 0, Number(s.performance_degradation) || 0,
+        Number(s.failure_prediction) || 0, Number(s.anomaly) || 0,
+        Number(s.compliance_audit) || 0, Number(s.operational_risk) || 0,
+      );
+    };
+    // Pair each event with its current 1-indexed position to preserve mapping data
+    const indexed = eventsForLlm.map((e, i) => ({
+      event: e,
+      origIdx: i + 1, // 1-indexed
+    }));
+    const nonZero = indexed.filter((p) => safeMax(p.event.scores) > 0);
+    // Only filter if we have at least 1 non-zero event (otherwise O1 would have caught it)
+    if (nonZero.length > 0 && nonZero.length < eventsForLlm.length) {
+      const removedCount = eventsForLlm.length - nonZero.length;
+      console.log(
+        `[${localTimestamp()}] Meta-analyze: O2 optimization removed ${removedCount} zero-score events ` +
+        `from LLM context (${nonZero.length} remaining, window=${windowId})`,
+      );
+      // Rebuild eventsForLlm and index maps from the filtered set
+      eventsForLlm = nonZero.map((p) => p.event);
+      const oldIdMap = new Map(eventIndexToId);
+      const oldMsgMap = new Map(eventIndexToMessage);
+      const oldSevMap = new Map(eventIndexToSeverity);
+      eventIndexToId.clear();
+      eventIndexToMessage.clear();
+      eventIndexToSeverity.clear();
+      for (let i = 0; i < nonZero.length; i++) {
+        const origIdx = nonZero[i].origIdx;
+        eventIndexToId.set(i + 1, oldIdMap.get(origIdx) ?? '');
+        eventIndexToMessage.set(i + 1, oldMsgMap.get(origIdx) ?? '');
+        eventIndexToSeverity.set(i + 1, oldSevMap.get(origIdx) ?? '');
+      }
+    }
+  }
+
   // ── Privacy filtering ──────────────────────────────────────
   const privacyConfig = await loadPrivacyFilterConfig(db);
   eventsForLlm = eventsForLlm.map((e) => filterMetaEventForLlm(e, privacyConfig));
@@ -308,11 +412,12 @@ export async function metaAnalyzeWindow(
   // included even when the template count exceeds the cap.
   // NOTE: After sorting, the eventIndexToId / eventIndexToMessage mappings are rebuilt to stay in sync.
   if (prioritizeHighScores && eventsForLlm.length > 1) {
-    // Pair events with their original representative IDs + messages before sorting
+    // Pair events with their current index-mapped IDs (safe after O2 filtering)
     const paired = eventsForLlm.map((e, i) => ({
       event: e,
-      repId: templateGroupValues[i].representativeEventId,
-      message: templateGroupValues[i].message,
+      repId: eventIndexToId.get(i + 1) ?? '',
+      message: eventIndexToMessage.get(i + 1) ?? '',
+      severity: eventIndexToSeverity.get(i + 1) ?? '',
     }));
     paired.sort((a, b) => {
       const safeMax = (s: typeof a.event.scores) => {
@@ -329,9 +434,11 @@ export async function metaAnalyzeWindow(
     eventsForLlm = paired.map((p) => p.event);
     eventIndexToId.clear();
     eventIndexToMessage.clear();
+    eventIndexToSeverity.clear();
     for (let i = 0; i < paired.length; i++) {
       eventIndexToId.set(i + 1, paired[i].repId);
       eventIndexToMessage.set(i + 1, paired[i].message);
+      eventIndexToSeverity.set(i + 1, paired[i].severity);
     }
   }
 
@@ -425,12 +532,18 @@ export async function metaAnalyzeWindow(
   let result: Awaited<ReturnType<typeof llm.metaAnalyze>>['result'];
   let usage: Awaited<ReturnType<typeof llm.metaAnalyze>>['usage'];
   try {
+    // Resolve per-task model override for meta-analysis
+    const taskModels = await resolveTaskModels(db);
+
     ({ result, usage } = await llm.metaAnalyze(
       eventsForLlm,
       system.description ?? '',
       sourceLabels,
       context,
-      { systemPrompt: customPrompts.metaSystemPrompt },
+      {
+        systemPrompt: customPrompts.metaSystemPrompt,
+        modelOverride: taskModels.meta_model || undefined,
+      },
     ));
   } catch (err) {
     console.error(
@@ -660,7 +773,7 @@ export async function metaAnalyzeWindow(
           // Persistence / continuation — standalone keywords that always indicate
           // the issue is NOT resolved (a valid resolution would say "resolved",
           // "fixed", "cleared", etc. — never "persists")
-          'persists', 'unresolved', 'continues to',
+          'persists', 'unresolved', 'continues to', 'ongoing',
           // Phrase variants with subject
           'issue remains', 'issue persists', 'issue continues',
           'problem persists', 'problem remains', 'problem continues',
@@ -669,6 +782,12 @@ export async function metaAnalyzeWindow(
           'no change', 'no fix', 'not fixed', 'unchanged',
           // "Indicating" phrases
           'indicating the issue remains',
+          // "Confirm ongoing" — the LLM sometimes says the evidence
+          // "confirms ongoing errors", which is contradictory
+          'confirm ongoing', 'confirms ongoing', 'confirming ongoing',
+          // Failure/error terms — a proof event describing a failure is never resolution
+          'failed', 'failure', 'connection error', 'connection failure',
+          'connection refused', 'reconnection failed', 'unreachable',
         ];
         const isContradictory = contradictoryPhrases.some((p) => evidenceText.includes(p));
         if (isContradictory) {
@@ -735,6 +854,39 @@ export async function metaAnalyzeWindow(
             `[${localTimestamp()}] Rejected LLM resolution for finding index ${resolvedEntry.index} ` +
             `(${openFinding.text.slice(0, 60)}…): proof events describe the same problem, ` +
             `not a counter-event. Treating as still-active instead.`,
+          );
+          await trx('findings')
+            .where({ id: dbId })
+            .whereIn('status', ['open', 'acknowledged'])
+            .update({
+              consecutive_misses: 0,
+              last_seen_at: nowIso,
+              occurrence_count: trx.raw('occurrence_count + 1'),
+            });
+          continue;
+        }
+
+        // ── Guardrail 3: Reject error-severity proof events ─────
+        // ERROR/CRITICAL/ALERT/EMERGENCY severity events describe problems,
+        // not solutions. They can NEVER serve as proof that an issue is resolved.
+        // Only accept resolution when at least one proof event has a non-error severity.
+        const ERROR_SEVERITIES = new Set([
+          'error', 'err', 'critical', 'crit', 'alert', 'emergency', 'emerg',
+        ]);
+        let allErrorSeverity = true;
+        for (const ref of eventRefs) {
+          const sev = (eventIndexToSeverity.get(ref) ?? '').toLowerCase().trim();
+          if (!sev || !ERROR_SEVERITIES.has(sev)) {
+            allErrorSeverity = false;
+            break;
+          }
+        }
+        if (allErrorSeverity && eventRefs.length > 0) {
+          console.log(
+            `[${localTimestamp()}] Rejected LLM resolution for finding index ${resolvedEntry.index} ` +
+            `(${openFinding.text.slice(0, 60)}…): all proof events have error-level severity ` +
+            `(${eventRefs.map((r) => `[${r}]=${eventIndexToSeverity.get(r)}`).join(', ')}). ` +
+            `Error events describe problems, not resolutions. Treating as still-active instead.`,
           );
           await trx('findings')
             .where({ id: dbId })

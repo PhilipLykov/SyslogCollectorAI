@@ -7,6 +7,32 @@ import { createWindows } from './windowing.js';
 import { metaAnalyzeWindow } from './metaAnalyze.js';
 import { evaluateAlerts } from '../alerting/evaluator.js';
 
+/** Load pipeline config from app_config, falling back to defaults. */
+async function loadPipelineConfig(db: Knex): Promise<{
+  pipeline_interval_minutes: number;
+  window_minutes: number;
+  scoring_limit_per_run: number;
+  effective_score_meta_weight: number;
+}> {
+  const DEFAULTS = {
+    pipeline_interval_minutes: 5,
+    window_minutes: 5,
+    scoring_limit_per_run: 500,
+    effective_score_meta_weight: 0.7,
+  };
+  try {
+    const row = await db('app_config').where({ key: 'pipeline_config' }).first('value');
+    if (!row) return DEFAULTS;
+    const raw = typeof row.value === 'string' ? JSON.parse(row.value) : row.value;
+    if (raw && typeof raw === 'object') {
+      return { ...DEFAULTS, ...(raw as Partial<typeof DEFAULTS>) };
+    }
+    return DEFAULTS;
+  } catch {
+    return DEFAULTS;
+  }
+}
+
 /**
  * Sync the adapter's config from the DB (app_config table), falling
  * back to environment variables. Called before each pipeline run so
@@ -36,17 +62,26 @@ export async function runPipeline(
   console.log(`[${localTimestamp()}] Pipeline run started.`);
 
   try {
+    // Load pipeline config from DB (runtime-configurable via UI)
+    const pipeCfg = await loadPipelineConfig(db);
+
     // 1. Per-event scoring
-    const scoringResult = await runPerEventScoringJob(db, llm, { limit: options?.scoringLimit ?? 500 });
+    const scoringResult = await runPerEventScoringJob(db, llm, {
+      limit: options?.scoringLimit ?? pipeCfg.scoring_limit_per_run,
+    });
 
     // 2. Create windows
-    const windows = await createWindows(db, { windowMinutes: options?.windowMinutes });
+    const windows = await createWindows(db, {
+      windowMinutes: options?.windowMinutes ?? pipeCfg.window_minutes,
+    });
 
     // 3. Meta-analyze each new window, track which succeed
     const analyzedWindows: typeof windows = [];
     for (const w of windows) {
       try {
-        await metaAnalyzeWindow(db, llm, w.id, { wMeta: options?.wMeta });
+        await metaAnalyzeWindow(db, llm, w.id, {
+          wMeta: options?.wMeta ?? pipeCfg.effective_score_meta_weight,
+        });
         analyzedWindows.push(w);
       } catch (err) {
         console.error(`[${localTimestamp()}] Meta-analyze failed for window ${w.id}:`, err);
@@ -80,13 +115,17 @@ export async function runPipeline(
 export function startPipelineScheduler(
   db: Knex,
   llm: OpenAiAdapter,
-  intervalMs: number = 5 * 60 * 1000, // default 5 minutes
+  intervalMs: number = 5 * 60 * 1000, // initial default 5 minutes
 ): { stop: () => void } {
   let running = false;
+  let stopped = false;
+  let currentTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const timer = setInterval(async () => {
+  async function tick() {
+    if (stopped) return;
     if (running) {
       console.log(`[${localTimestamp()}] Pipeline: previous run still in progress, skipping.`);
+      scheduleNext();
       return;
     }
     running = true;
@@ -102,14 +141,30 @@ export function startPipelineScheduler(
       await runPipeline(db, llm);
     } finally {
       running = false;
+      scheduleNext();
     }
-  }, intervalMs);
+  }
 
-  console.log(`[${localTimestamp()}] Pipeline scheduler started (interval=${intervalMs}ms).`);
+  async function scheduleNext() {
+    if (stopped) return;
+    // Read the latest pipeline interval from DB (supports runtime changes via UI)
+    let nextMs = intervalMs;
+    try {
+      const cfg = await loadPipelineConfig(db);
+      const cfgMs = cfg.pipeline_interval_minutes * 60 * 1000;
+      if (cfgMs >= 60_000 && cfgMs <= 3_600_000) nextMs = cfgMs;
+    } catch { /* use default */ }
+    currentTimer = setTimeout(tick, nextMs);
+  }
+
+  console.log(`[${localTimestamp()}] Pipeline scheduler started (initial interval=${intervalMs}ms, reads from DB).`);
+  // Start the first tick after the initial interval
+  currentTimer = setTimeout(tick, intervalMs);
 
   return {
     stop: () => {
-      clearInterval(timer);
+      stopped = true;
+      if (currentTimer) clearTimeout(currentTimer);
       console.log(`[${localTimestamp()}] Pipeline scheduler stopped.`);
     },
   };

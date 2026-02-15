@@ -338,7 +338,9 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
         limit: 50,
         min_score: 0.001,
       });
-      setCriterionGroups(data);
+      // Filter out events already marked as normal behavior (defense-in-depth:
+      // scores may not be zeroed yet if retroactive update didn't match)
+      setCriterionGroups(data.filter((g) => !isNormalBehavior(g.message)));
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('Authentication')) {
@@ -349,7 +351,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
     } finally {
       setCriterionLoading(false);
     }
-  }, [selectedCriterion, system.id]);
+  }, [selectedCriterion, system.id, isNormalBehavior]);
 
   // ── Expand a grouped row to show individual events ─────
   const handleExpandGroup = useCallback(async (groupKey: string) => {
@@ -526,12 +528,14 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
         const criterion = CRITERIA.find((c) => c.slug === selectedCriterion);
         if (criterion) {
           try {
+            // Wait briefly for the backend retroactive score zeroing to complete
+            // before refreshing, then filter out any remaining normal-behavior events
             const data = await fetchGroupedEventScores(system.id, {
               criterion_id: criterion.id,
               limit: 50,
               min_score: 0.001,
             });
-            setCriterionGroups(data);
+            setCriterionGroups(data.filter((g) => !isNormalBehavior(g.message)));
             setExpandedGroup(null);
             setExpandedGroupEvents([]);
           } catch { /* ignore refresh error */ }
@@ -547,7 +551,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
     } finally {
       setMarkOkLoading(false);
     }
-  }, [markOkModal, markOkPattern, system.id, selectedCriterion, onRefreshSystem, loadNormalTemplates]);
+  }, [markOkModal, markOkPattern, system.id, selectedCriterion, onRefreshSystem, loadNormalTemplates, isNormalBehavior]);
 
   // ── Re-evaluate meta-analysis handler ───────────────────
   const handleReEvaluate = useCallback(async () => {
@@ -573,7 +577,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
               limit: 50,
               min_score: 0.001,
             });
-            setCriterionGroups(data);
+            setCriterionGroups(data.filter((g) => !isNormalBehavior(g.message)));
             setExpandedGroup(null);
             setExpandedGroupEvents([]);
           } catch { /* ignore */ }
@@ -599,7 +603,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
     } finally {
       setReEvalLoading(false);
     }
-  }, [reEvalLoading, system.id, selectedCriterion, onRefreshSystem, loadFindings]);
+  }, [reEvalLoading, system.id, selectedCriterion, onRefreshSystem, loadFindings, isNormalBehavior]);
 
   // ── Compute filtered findings ───────────────────────────
   const openFindings = findings.filter((f) => f.status === 'open');
