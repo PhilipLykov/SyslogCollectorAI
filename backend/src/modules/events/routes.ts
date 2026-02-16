@@ -88,11 +88,11 @@ async function transitionFindingsOnAck(
   // Find open findings for the system
   const findingsQuery = db('findings').where('status', 'open');
   if (systemId) findingsQuery.where('system_id', systemId);
-  const openFindings = await findingsQuery.select('id', 'title', 'description');
+  const openFindings = await findingsQuery.select('id', 'text');
 
   let transitioned = 0;
   for (const finding of openFindings) {
-    const findingText = `${finding.title || ''} ${finding.description || ''}`.toLowerCase();
+    const findingText = (finding.text || '').toLowerCase();
     // Check if any acknowledged message text significantly matches
     const match = ackedMessages.some((msg) => {
       const m = msg.toLowerCase();

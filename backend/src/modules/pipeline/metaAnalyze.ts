@@ -1144,7 +1144,11 @@ export async function metaAnalyzeWindow(
         .first();
 
       const maxEventScore = Number(maxEventRow?.max_score ?? 0);
-      const effectiveValue = wMeta * metaScore + (1 - wMeta) * maxEventScore;
+
+      // If no un-acknowledged events have scores, the meta_score should
+      // not inflate the dashboard — zero it, matching recalcEffectiveScores.
+      const effectiveMetaScore = maxEventScore === 0 ? 0 : metaScore;
+      const effectiveValue = wMeta * effectiveMetaScore + (1 - wMeta) * maxEventScore;
 
       await trx.raw(`
         INSERT INTO effective_scores (window_id, system_id, criterion_id, effective_value, meta_score, max_event_score, updated_at)
@@ -1154,7 +1158,7 @@ export async function metaAnalyzeWindow(
                       meta_score = EXCLUDED.meta_score,
                       max_event_score = EXCLUDED.max_event_score,
                       updated_at = EXCLUDED.updated_at
-      `, [windowId, system.id, criterion.id, effectiveValue, metaScore, maxEventScore, nowIso]);
+      `, [windowId, system.id, criterion.id, effectiveValue, effectiveMetaScore, maxEventScore, nowIso]);
     }
 
     // ── Track LLM usage ─────────────────────────────────

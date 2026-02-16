@@ -1204,7 +1204,9 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
 
           {displayedFindings.length === 0 && !findingsLoading && (
             <div className="findings-empty">
-              {findingsTab === 'open' && 'No open findings. The AI has not detected any active issues.'}
+              {findingsTab === 'open' && (ackedFindings.length > 0
+                ? 'No open findings. All issues have been acknowledged.'
+                : 'No open findings. The AI has not detected any active issues.')}
               {findingsTab === 'acknowledged' && 'No acknowledged findings.'}
               {findingsTab === 'resolved' && 'No resolved findings yet.'}
             </div>
