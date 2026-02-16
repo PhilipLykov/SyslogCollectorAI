@@ -108,9 +108,9 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
         }
       }
 
-      // 5. Active findings per system (open + acknowledged = active)
+      // 5. Open findings per system (only unhandled — acknowledged are excluded)
       const findingCountRows = await db('findings')
-        .whereIn('status', ['open', 'acknowledged'])
+        .where('status', 'open')
         .groupBy('system_id', 'severity')
         .select('system_id', 'severity', db.raw('COUNT(*)::int as cnt'));
       const findingMap = new Map<string, Record<string, number>>();

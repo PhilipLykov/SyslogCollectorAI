@@ -357,7 +357,7 @@ export interface SystemScoreInfo {
   max_event: number;
 }
 
-/** Counts of active (open + acknowledged) findings by severity. */
+/** Counts of open (unhandled) findings by severity for the dashboard overview. */
 export interface ActiveFindingsCounts {
   total: number;
   critical: number;
