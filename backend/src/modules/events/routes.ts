@@ -4,16 +4,17 @@ import { requireAuth } from '../../middleware/auth.js';
 import { PERMISSIONS } from '../../middleware/permissions.js';
 import { localTimestamp } from '../../config/index.js';
 import { invalidateAiConfigCache } from '../llm/aiConfig.js';
-import { writeAuditLog } from '../../middleware/audit.js';
+import { writeAuditLog, getActorName } from '../../middleware/audit.js';
 import { getDefaultEventSource, getEventSource } from '../../services/eventSourceFactory.js';
-import { CRITERIA } from '../../types/index.js';
-
 /** Default meta-weight for effective score blending (must match metaAnalyze). */
 const DEFAULT_W_META = 0.7;
 
 /**
  * Recalculate effective_scores for recent windows belonging to a system.
  * Called after ack/unack to ensure the score bars reflect the change immediately.
+ *
+ * Uses a single SQL CTE+UPDATE instead of a nested loop over windows x criteria
+ * (previously ~36,000 queries, now 1 query).
  */
 async function recalcEffectiveScores(db: ReturnType<typeof getDb>, systemId: string | null): Promise<number> {
   let windowDays = 7;
@@ -27,51 +28,47 @@ async function recalcEffectiveScores(db: ReturnType<typeof getDb>, systemId: str
   } catch { /* use default */ }
 
   const since = new Date(Date.now() - windowDays * 86_400_000).toISOString();
-  const windowQuery = db('windows').where('to_ts', '>=', since).select('id', 'system_id', 'from_ts', 'to_ts');
-  if (systemId) windowQuery.where('system_id', systemId);
-  const windows = await windowQuery;
-  let updated = 0;
 
-  for (const w of windows) {
-    let windowUpdated = false;
-    for (const criterion of CRITERIA) {
-      const existing = await db('effective_scores')
-        .where({ window_id: w.id, system_id: w.system_id, criterion_id: criterion.id })
-        .first();
-      if (!existing) continue;
+  // Single CTE query: for every effective_scores row in the display range,
+  // recalculate max_event_score from un-acknowledged events, then apply
+  // the zero-meta rule and blending formula.
+  const result = await db.raw(`
+    WITH window_max AS (
+      SELECT
+        eff.window_id,
+        eff.system_id,
+        eff.criterion_id,
+        eff.meta_score AS orig_meta,
+        COALESCE(sub.max_score, 0) AS new_max
+      FROM effective_scores eff
+      JOIN windows w ON eff.window_id = w.id
+      LEFT JOIN LATERAL (
+        SELECT MAX(es.score) AS max_score
+        FROM events e
+        JOIN event_scores es ON es.event_id = e.id::text
+        WHERE e.system_id = eff.system_id
+          AND e.timestamp >= w.from_ts
+          AND e.timestamp <= w.to_ts
+          AND e.acknowledged_at IS NULL
+          AND es.criterion_id = eff.criterion_id
+          AND es.score_type = 'event'
+      ) sub ON true
+      WHERE w.to_ts >= ?
+        AND (? IS NULL OR eff.system_id = ?)
+    )
+    UPDATE effective_scores eff
+    SET max_event_score = wm.new_max,
+        meta_score = CASE WHEN wm.new_max = 0 THEN 0 ELSE wm.orig_meta END,
+        effective_value = ? * (CASE WHEN wm.new_max = 0 THEN 0 ELSE wm.orig_meta END)
+                        + ? * wm.new_max,
+        updated_at = NOW()
+    FROM window_max wm
+    WHERE eff.window_id = wm.window_id
+      AND eff.system_id = wm.system_id
+      AND eff.criterion_id = wm.criterion_id
+  `, [since, systemId, systemId, DEFAULT_W_META, 1 - DEFAULT_W_META]);
 
-      // Recalculate max_event_score from un-acknowledged events only
-      const windowEventIds = db('events')
-        .select(db.raw('id::text'))
-        .where('system_id', w.system_id)
-        .where('timestamp', '>=', w.from_ts)
-        .where('timestamp', '<=', w.to_ts)
-        .whereNull('acknowledged_at');
-
-      const maxRow = await db('event_scores')
-        .whereIn('event_id', windowEventIds)
-        .where({ criterion_id: criterion.id })
-        .max('score as max_score')
-        .first();
-
-      const newMaxEvent = Number(maxRow?.max_score ?? 0);
-      let metaScore = Number(existing.meta_score) || 0;
-      if (newMaxEvent === 0) metaScore = 0;
-
-      const newEffective = DEFAULT_W_META * metaScore + (1 - DEFAULT_W_META) * newMaxEvent;
-      await db('effective_scores')
-        .where({ window_id: w.id, system_id: w.system_id, criterion_id: criterion.id })
-        .update({
-          meta_score: metaScore,
-          max_event_score: newMaxEvent,
-          effective_value: newEffective,
-          updated_at: new Date().toISOString(),
-        });
-      windowUpdated = true;
-    }
-    if (windowUpdated) updated++;
-  }
-  return updated;
+  return result.rowCount ?? 0;
 }
 
 /**
@@ -346,6 +343,7 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
         );
 
         await writeAuditLog(db, {
+          actor_name: getActorName(request),
           action: 'event_acknowledge',
           resource_type: 'events',
           details: { system_id, from: fromTs, to: toTs, count: totalAcked, updatedWindows, transitionedFindings },
@@ -410,6 +408,7 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
         );
 
         await writeAuditLog(db, {
+          actor_name: getActorName(request),
           action: 'event_unacknowledge',
           resource_type: 'events',
           details: { count: result, updatedWindows },
@@ -524,6 +523,7 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
         );
 
         await writeAuditLog(db, {
+          actor_name: getActorName(request),
           action: 'event_acknowledge_group',
           resource_type: 'events',
           details: { system_id, group_key, count: ackResult, updatedWindows, transitionedFindings },
@@ -583,7 +583,7 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
 
         const idStrings = rows.map((r: any) => r.id);
 
-        // Clear acknowledged_at
+        // Clear acknowledged_at and scored_at so the pipeline re-scores them
         await db('events')
           .where('system_id', system_id)
           .whereNotNull('acknowledged_at')
@@ -591,7 +591,7 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
             this.where('template_id', group_key)
               .orWhere(db.raw('id::text = ?', [group_key]));
           })
-          .update({ acknowledged_at: null });
+          .update({ acknowledged_at: null, scored_at: null });
 
         // Delete scores so pipeline re-scores them
         const CHUNK = 5000;
@@ -615,6 +615,7 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
         );
 
         await writeAuditLog(db, {
+          actor_name: getActorName(request),
           action: 'event_unacknowledge_group',
           resource_type: 'events',
           details: { system_id, group_key, count: rows.length, updatedWindows },
@@ -705,6 +706,7 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
       invalidateAiConfigCache();
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'config_update',
         resource_type: 'ack_config',
         details: { mode, prompt },

@@ -207,7 +207,9 @@ export function AuditLogSection({ onAuthError }: Props) {
                           <span className="admin-resource-id"> ({entry.resource_id.slice(0, 8)}…)</span>
                         )}
                       </td>
-                      <td>{entry.actor ?? entry.user_id?.slice(0, 8) ?? '—'}</td>
+                      <td title={entry.user_id ?? undefined}>
+                        {entry.username ?? entry.display_name ?? entry.actor ?? '—'}
+                      </td>
                       <td className="admin-date-cell">{entry.ip ?? '—'}</td>
                       <td>
                         {entry.details ? (

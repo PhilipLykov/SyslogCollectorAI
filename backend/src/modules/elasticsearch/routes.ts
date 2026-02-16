@@ -16,7 +16,7 @@ import { getDb } from '../../db/index.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { PERMISSIONS } from '../../middleware/permissions.js';
 import { localTimestamp } from '../../config/index.js';
-import { writeAuditLog } from '../../middleware/audit.js';
+import { writeAuditLog, getActorName } from '../../middleware/audit.js';
 import {
   getEsClient,
   buildTempClient,
@@ -108,6 +108,7 @@ export async function registerElasticsearchRoutes(app: FastifyInstance): Promise
       });
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'es_connection_create',
         resource_type: 'elasticsearch_connection',
         resource_id: id,
@@ -169,6 +170,7 @@ export async function registerElasticsearchRoutes(app: FastifyInstance): Promise
       await destroyEsClient(id);
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'es_connection_update',
         resource_type: 'elasticsearch_connection',
         resource_id: id,
@@ -209,6 +211,7 @@ export async function registerElasticsearchRoutes(app: FastifyInstance): Promise
       await db('elasticsearch_connections').where({ id }).del();
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'es_connection_delete',
         resource_type: 'elasticsearch_connection',
         resource_id: id,

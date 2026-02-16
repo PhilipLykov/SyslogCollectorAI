@@ -4,7 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../../db/index.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { PERMISSIONS } from '../../middleware/permissions.js';
-import { writeAuditLog } from '../../middleware/audit.js';
+import { writeAuditLog, getActorName } from '../../middleware/audit.js';
 import { localTimestamp } from '../../config/index.js';
 import { CRITERIA } from '../../types/index.js';
 import {
@@ -256,6 +256,7 @@ export async function registerNormalBehaviorRoutes(app: FastifyInstance): Promis
       });
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'normal_behavior_template_create',
         resource_type: 'normal_behavior_template',
         resource_id: id,
@@ -369,6 +370,7 @@ export async function registerNormalBehaviorRoutes(app: FastifyInstance): Promis
       await db('normal_behavior_templates').where({ id }).update(updates);
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'normal_behavior_template_update',
         resource_type: 'normal_behavior_template',
         resource_id: id,
@@ -398,6 +400,7 @@ export async function registerNormalBehaviorRoutes(app: FastifyInstance): Promis
       await db('normal_behavior_templates').where({ id }).delete();
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'normal_behavior_template_delete',
         resource_type: 'normal_behavior_template',
         resource_id: id,

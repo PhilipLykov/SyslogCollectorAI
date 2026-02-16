@@ -6,7 +6,7 @@ import { PERMISSIONS } from '../../middleware/permissions.js';
 import { localTimestamp } from '../../config/index.js';
 import { getAvailableConnectorTypes } from './registry.js';
 import { validateUrl } from './urlValidation.js';
-import { writeAuditLog } from '../../middleware/audit.js';
+import { writeAuditLog, getActorName } from '../../middleware/audit.js';
 
 /**
  * Connector config API: CRUD for connectors.
@@ -84,6 +84,7 @@ export async function registerConnectorRoutes(app: FastifyInstance): Promise<voi
       app.log.info(`[${localTimestamp()}] Connector created: ${type}/${name} (${id})`);
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'connector_create',
         resource_type: 'connector',
         resource_id: id,
@@ -126,6 +127,7 @@ export async function registerConnectorRoutes(app: FastifyInstance): Promise<voi
       await db('connectors').where({ id }).update(updates);
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'connector_update',
         resource_type: 'connector',
         resource_id: id,
@@ -156,6 +158,7 @@ export async function registerConnectorRoutes(app: FastifyInstance): Promise<voi
       });
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'connector_delete',
         resource_type: 'connector',
         resource_id: id,

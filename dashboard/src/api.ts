@@ -292,6 +292,10 @@ export interface AuditLogEntry {
   id: string;
   at: string;
   actor: string | null;
+  /** Human-readable username (from users table JOIN). */
+  username: string | null;
+  /** Display name (from users table JOIN). */
+  display_name: string | null;
   user_id: string | null;
   session_id: string | null;
   action: string;

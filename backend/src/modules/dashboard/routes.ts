@@ -5,7 +5,7 @@ import { requireAuth } from '../../middleware/auth.js';
 import { PERMISSIONS } from '../../middleware/permissions.js';
 import { CRITERIA } from '../../types/index.js';
 import { localTimestamp } from '../../config/index.js';
-import { writeAuditLog } from '../../middleware/audit.js';
+import { writeAuditLog, getActorName } from '../../middleware/audit.js';
 import { getEventSource, getDefaultEventSource } from '../../services/eventSourceFactory.js';
 import { OpenAiAdapter } from '../llm/adapter.js';
 import { resolveAiConfig } from '../llm/aiConfig.js';
@@ -48,90 +48,98 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
       const sinceWindow = new Date(Date.now() - dashCfg.score_display_window_days * 24 * 60 * 60 * 1000).toISOString();
       const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
-      const result = [];
+      // ── Bulk queries (reduce N+1 per-system loops) ──────────
+
+      // 1. Latest window per system (single query)
+      const latestWindows = await db.raw(`
+        SELECT DISTINCT ON (system_id) id, system_id, from_ts, to_ts
+        FROM windows
+        ORDER BY system_id, to_ts DESC
+      `);
+      const windowMap = new Map<string, any>();
+      for (const w of latestWindows.rows ?? []) windowMap.set(w.system_id, w);
+
+      // 2. Effective scores: MAX across display window, grouped by system + criterion
+      const allScoreRows = await db('effective_scores')
+        .join('windows', 'effective_scores.window_id', 'windows.id')
+        .where('windows.to_ts', '>=', sinceWindow)
+        .groupBy('effective_scores.system_id', 'effective_scores.criterion_id')
+        .select(
+          'effective_scores.system_id',
+          'effective_scores.criterion_id',
+          db.raw('MAX(effective_scores.effective_value) as effective_value'),
+          db.raw('MAX(effective_scores.meta_score) as meta_score'),
+          db.raw('MAX(effective_scores.max_event_score) as max_event_score'),
+        );
+      const scoreMap = new Map<string, Record<string, { effective: number; meta: number; max_event: number }>>();
+      for (const row of allScoreRows) {
+        const criterion = CRITERIA.find((c) => c.id === row.criterion_id);
+        if (!criterion) continue;
+        let sysScores = scoreMap.get(row.system_id);
+        if (!sysScores) { sysScores = {}; scoreMap.set(row.system_id, sysScores); }
+        sysScores[criterion.slug] = {
+          effective: Number(row.effective_value) || 0,
+          meta: Number(row.meta_score) || 0,
+          max_event: Number(row.max_event_score) || 0,
+        };
+      }
+
+      // 3. Source counts per system (single query)
+      const sourceCounts = await db('log_sources')
+        .groupBy('system_id')
+        .select('system_id', db.raw('COUNT(id)::int as cnt'));
+      const sourceCountMap = new Map<string, number>();
+      for (const r of sourceCounts) sourceCountMap.set(r.system_id, r.cnt);
+
+      // 4. Event counts (last 24h) per system (single query for PG systems)
+      const pgEventCounts = await db('events')
+        .where('timestamp', '>=', since24h)
+        .groupBy('system_id')
+        .select('system_id', db.raw('COUNT(id)::int as cnt'));
+      const eventCountMap = new Map<string, number>();
+      for (const r of pgEventCounts) eventCountMap.set(r.system_id, r.cnt);
+
+      // For ES-backed systems, query individually (rare, can't aggregate cross-backend)
       for (const system of systems) {
-        // Latest window for this system (used for display metadata)
-        const latestWindow = await db('windows')
-          .where({ system_id: system.id })
-          .orderBy('to_ts', 'desc')
-          .first();
-
-        let scores: Record<string, {
-          effective: number; meta: number; max_event: number;
-        }> = {};
-
-        if (latestWindow) {
-          // Primary scores: MAX across the configured display window — gives
-          // the user a stable view of recent issues without flipping to zero
-          // as soon as a single analysis window expires.
-          const recentRows = await db('effective_scores')
-            .join('windows', 'effective_scores.window_id', 'windows.id')
-            .where('effective_scores.system_id', system.id)
-            .where('windows.to_ts', '>=', sinceWindow)
-            .groupBy('effective_scores.criterion_id')
-            .select(
-              'effective_scores.criterion_id',
-              db.raw('MAX(effective_scores.effective_value) as effective_value'),
-              db.raw('MAX(effective_scores.meta_score) as meta_score'),
-              db.raw('MAX(effective_scores.max_event_score) as max_event_score'),
-            );
-
-          for (const row of recentRows) {
-            const criterion = CRITERIA.find((c) => c.id === row.criterion_id);
-            if (criterion) {
-              scores[criterion.slug] = {
-                effective: Number(row.effective_value) || 0,
-                meta: Number(row.meta_score) || 0,
-                max_event: Number(row.max_event_score) || 0,
-              };
-            }
-          }
+        if (system.event_source === 'elasticsearch' && !eventCountMap.has(system.id)) {
+          const sysEventSource = getEventSource(system, db);
+          const cnt = await sysEventSource.countSystemEvents(system.id, since24h);
+          eventCountMap.set(system.id, cnt);
         }
+      }
 
-        // Source count
-        const sourceCount = await db('log_sources')
-          .where({ system_id: system.id })
-          .count('id as cnt')
-          .first();
+      // 5. Active findings per system (single query)
+      const findingCountRows = await db('findings')
+        .where('status', 'open')
+        .groupBy('system_id', 'severity')
+        .select('system_id', 'severity', db.raw('COUNT(*)::int as cnt'));
+      const findingMap = new Map<string, Record<string, number>>();
+      for (const row of findingCountRows) {
+        let entry = findingMap.get(row.system_id);
+        if (!entry) { entry = { total: 0, critical: 0, high: 0, medium: 0, low: 0, info: 0 }; findingMap.set(row.system_id, entry); }
+        const count = Number(row.cnt) || 0;
+        const sev = (row.severity as string).toLowerCase();
+        if (sev in entry) entry[sev] = count;
+        entry.total += count;
+      }
 
-        // Event count (last 24h) — via EventSource abstraction (per-system dispatch)
-        const sysEventSource = getEventSource(system, db);
-        const eventCount24h = await sysEventSource.countSystemEvents(system.id, since24h);
-
-        // Active findings count by severity (open only — acknowledged have been handled)
-        const findingRows = await db('findings')
-          .where({ system_id: system.id })
-          .where('status', 'open')
-          .groupBy('severity')
-          .select('severity', db.raw('COUNT(*) as cnt'));
-
-        let activeFindings: Record<string, number> | undefined;
-        if (findingRows.length > 0) {
-          activeFindings = { total: 0, critical: 0, high: 0, medium: 0, low: 0, info: 0 };
-          for (const row of findingRows) {
-            const count = Number(row.cnt) || 0;
-            const sev = (row.severity as string).toLowerCase();
-            if (sev in activeFindings) {
-              (activeFindings as Record<string, number>)[sev] = count;
-            }
-            activeFindings.total += count;
-          }
-        }
-
-        result.push({
+      // ── Assemble response ───────────────────────────────────
+      const result = systems.map((system: any) => {
+        const latestWindow = windowMap.get(system.id);
+        return {
           id: system.id,
           name: system.name,
           description: system.description,
-          source_count: Number(sourceCount?.cnt ?? 0),
-          event_count_24h: eventCount24h,
+          source_count: sourceCountMap.get(system.id) ?? 0,
+          event_count_24h: eventCountMap.get(system.id) ?? 0,
           latest_window: latestWindow
             ? { id: latestWindow.id, from: latestWindow.from_ts, to: latestWindow.to_ts }
             : null,
-          scores,
-          active_findings: activeFindings,
+          scores: scoreMap.get(system.id) ?? {},
+          active_findings: findingMap.has(system.id) ? findingMap.get(system.id) : undefined,
           updated_at: system.updated_at,
-        });
-      }
+        };
+      });
 
       return reply.send(result);
     },
@@ -282,6 +290,7 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
         });
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'finding_acknowledge',
         resource_type: 'finding',
         resource_id: findingId,
@@ -320,6 +329,7 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
         });
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'finding_reopen',
         resource_type: 'finding',
         resource_id: findingId,
@@ -520,6 +530,7 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
       }
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'system_re_evaluate',
         resource_type: 'monitored_system',
         resource_id: systemId,

@@ -33,7 +33,14 @@ export async function registerAuditRoutes(app: FastifyInstance): Promise<void> {
       const limit = Math.min(200, Math.max(1, Number(request.query.limit) || 50));
       const offset = (page - 1) * limit;
 
-      let query = db('audit_log').orderBy('at', 'desc');
+      let query = db('audit_log')
+        .leftJoin('users', 'audit_log.user_id', 'users.id')
+        .select(
+          'audit_log.*',
+          'users.username as username',
+          'users.display_name as display_name',
+        )
+        .orderBy('audit_log.at', 'desc');
       let countQuery = db('audit_log');
 
       // Filters

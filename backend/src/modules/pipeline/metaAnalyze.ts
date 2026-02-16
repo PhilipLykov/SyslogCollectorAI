@@ -538,10 +538,15 @@ export async function metaAnalyzeWindow(
   // re-raising them. Remove any summary whose text significantly overlaps
   // with the messages of currently-acknowledged events for this system.
   if (effectiveExcludeAcked && context.previousSummaries.length > 0) {
+    // Use DISTINCT ON (normalized_hash) instead of DISTINCT(message) for efficiency.
+    // Also limit to recent events for partition pruning.
+    const ackedRecentCutoff = new Date(Date.now() - 7 * 86_400_000).toISOString();
     const ackedMessages = await db('events')
       .where('system_id', system.id)
       .whereNotNull('acknowledged_at')
-      .distinct('message')
+      .where('timestamp', '>=', ackedRecentCutoff)
+      .distinctOn('normalized_hash')
+      .select('message', 'normalized_hash')
       .limit(500);
 
     if (ackedMessages.length > 0) {
@@ -1125,41 +1130,46 @@ export async function metaAnalyzeWindow(
       }
     }
 
-    // ── Compute effective scores per criterion ──────────
+    // ── Compute effective scores per criterion (batched) ──────────
+    // Single query to get MAX(score) per criterion for un-acknowledged events,
+    // then batch-insert all 6 effective_scores rows in one statement.
+    const maxScoreRows = await trx.raw(`
+      SELECT es.criterion_id, COALESCE(MAX(es.score), 0) AS max_score
+      FROM event_scores es
+      WHERE es.event_id = ANY(?)
+        AND es.score_type = 'event'
+        AND NOT EXISTS (
+          SELECT 1 FROM events e
+          WHERE e.id::text = es.event_id
+            AND e.acknowledged_at IS NOT NULL
+        )
+      GROUP BY es.criterion_id
+    `, [eventIds.map(String)]);
+    const maxScoreMap = new Map<number, number>();
+    for (const row of maxScoreRows.rows ?? []) {
+      maxScoreMap.set(Number(row.criterion_id), Number(row.max_score));
+    }
+
+    const effPlaceholders: string[] = [];
+    const effValues: any[] = [];
     for (const criterion of CRITERIA) {
-      const metaScore = (result.meta_scores as any)[criterion.slug] ?? 0;
-
-      // Filter out acknowledged events from max_event_score calculation
-      // so acked events do not inflate the effective score.
-      const maxEventRow = await trx('event_scores')
-        .whereIn('event_id', eventIds)
-        .where({ criterion_id: criterion.id })
-        .whereNotExists(function (this: any) {
-          this.select(trx.raw(1))
-            .from('events')
-            .whereRaw('events.id::text = event_scores.event_id')
-            .whereNotNull('events.acknowledged_at');
-        })
-        .max('score as max_score')
-        .first();
-
-      const maxEventScore = Number(maxEventRow?.max_score ?? 0);
-
-      // If no un-acknowledged events have scores, the meta_score should
-      // not inflate the dashboard — zero it, matching recalcEffectiveScores.
+      const metaScore = Number((result.meta_scores as any)[criterion.slug]) || 0;
+      const maxEventScore = maxScoreMap.get(criterion.id) ?? 0;
       const effectiveMetaScore = maxEventScore === 0 ? 0 : metaScore;
       const effectiveValue = wMeta * effectiveMetaScore + (1 - wMeta) * maxEventScore;
-
-      await trx.raw(`
-        INSERT INTO effective_scores (window_id, system_id, criterion_id, effective_value, meta_score, max_event_score, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT (window_id, system_id, criterion_id)
-        DO UPDATE SET effective_value = EXCLUDED.effective_value,
-                      meta_score = EXCLUDED.meta_score,
-                      max_event_score = EXCLUDED.max_event_score,
-                      updated_at = EXCLUDED.updated_at
-      `, [windowId, system.id, criterion.id, effectiveValue, effectiveMetaScore, maxEventScore, nowIso]);
+      effPlaceholders.push('(?, ?, ?, ?, ?, ?, ?)');
+      effValues.push(windowId, system.id, criterion.id, effectiveValue, effectiveMetaScore, maxEventScore, nowIso);
     }
+
+    await trx.raw(`
+      INSERT INTO effective_scores (window_id, system_id, criterion_id, effective_value, meta_score, max_event_score, updated_at)
+      VALUES ${effPlaceholders.join(', ')}
+      ON CONFLICT (window_id, system_id, criterion_id)
+      DO UPDATE SET effective_value = EXCLUDED.effective_value,
+                    meta_score = EXCLUDED.meta_score,
+                    max_event_score = EXCLUDED.max_event_score,
+                    updated_at = EXCLUDED.updated_at
+    `, effValues);
 
     // ── Track LLM usage ─────────────────────────────────
     await trx('llm_usage').insert({

@@ -369,7 +369,7 @@ export async function runMaintenance(db: Knex): Promise<MaintenanceRunResult> {
   // ── 2. VACUUM ANALYZE ─────────────────────────────────────
   try {
     // VACUUM cannot run inside a transaction, so use raw queries
-    const tables = ['events', 'event_scores', 'message_templates', 'findings', 'meta_results', 'windows'];
+    const tables = ['events', 'event_scores', 'effective_scores', 'message_templates', 'findings', 'meta_results', 'windows'];
     for (const table of tables) {
       try {
         await db.raw(`VACUUM ANALYZE ${table}`);
@@ -393,7 +393,7 @@ export async function runMaintenance(db: Knex): Promise<MaintenanceRunResult> {
   // This avoids PostgreSQL errors when indexes don't exist (e.g. partitioned
   // tables have per-partition indexes with auto-generated names).
   try {
-    const targetTables = ['events', 'event_scores', 'findings', 'message_templates', 'meta_results'];
+    const targetTables = ['events', 'event_scores', 'effective_scores', 'findings', 'message_templates', 'meta_results', 'windows'];
     const idxResult = await db.raw(`
       SELECT indexname FROM pg_indexes
       WHERE schemaname = 'public'

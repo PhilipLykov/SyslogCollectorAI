@@ -306,18 +306,20 @@ export class PgEventSource implements EventSource {
     systemId: string | undefined,
     limit: number,
   ): Promise<LogEvent[]> {
+    // Use scored_at column instead of expensive LEFT JOIN with event_scores.
+    // Also limit to recent events (last 48h) for partition pruning.
+    const recentCutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+
     let query = this.db('events')
-      .joinRaw('LEFT JOIN event_scores ON events.id::text = event_scores.event_id')
-      .whereNull('event_scores.id')
-      .whereNull('events.acknowledged_at')
-      .select(
-        'events.id', 'events.system_id', 'events.message', 'events.severity',
-        'events.host', 'events.program', 'events.log_source_id',
-      )
+      .whereNull('scored_at')
+      .whereNull('acknowledged_at')
+      .where('timestamp', '>=', recentCutoff)
+      .select('id', 'system_id', 'message', 'severity', 'host', 'program', 'log_source_id')
+      .orderBy('timestamp', 'desc')
       .limit(limit);
 
     if (systemId) {
-      query = query.where('events.system_id', systemId);
+      query = query.where('system_id', systemId);
     }
 
     return query;
@@ -413,13 +415,13 @@ export class PgEventSource implements EventSource {
 
     const idStrings = rows.map((r: any) => String(r.id));
 
-    // Clear acknowledged_at
+    // Clear acknowledged_at and scored_at so the pipeline re-scores these events
     let updateQ = this.db('events')
       .whereNotNull('acknowledged_at')
       .where('timestamp', '<=', filters.to);
     if (filters.from) updateQ = updateQ.where('timestamp', '>=', filters.from);
     if (filters.system_id) updateQ = updateQ.where('system_id', filters.system_id);
-    const count = await updateQ.update({ acknowledged_at: null });
+    const count = await updateQ.update({ acknowledged_at: null, scored_at: null });
 
     // Delete existing scores so the scoring pipeline re-scores these events
     const CHUNK = 5000;

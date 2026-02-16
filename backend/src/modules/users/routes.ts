@@ -5,7 +5,7 @@ import { localTimestamp } from '../../config/index.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { PERMISSIONS } from '../../middleware/permissions.js';
 import { hashPassword, validatePasswordPolicy } from '../../middleware/passwords.js';
-import { writeAuditLog } from '../../middleware/audit.js';
+import { writeAuditLog, getActorName } from '../../middleware/audit.js';
 import type { UserRow } from '../../types/index.js';
 
 /** Fetch all valid role names from the database. */
@@ -124,6 +124,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       const created: UserRow = await db('users').where({ id }).first();
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'user_create',
         resource_type: 'user',
         resource_id: id,
@@ -178,6 +179,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       const updated: UserRow = await db('users').where({ id: request.params.id }).first();
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'user_update',
         resource_type: 'user',
         resource_id: request.params.id,
@@ -220,6 +222,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       await db('sessions').where({ user_id: request.params.id }).del();
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'password_reset',
         resource_type: 'user',
         resource_id: request.params.id,
@@ -268,6 +271,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       const updated: UserRow = await db('users').where({ id: user.id }).first();
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: newActive ? 'user_enable' : 'user_disable',
         resource_type: 'user',
         resource_id: user.id,
@@ -306,6 +310,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       await db('sessions').where({ user_id: user.id }).del();
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'user_delete',
         resource_type: 'user',
         resource_id: user.id,

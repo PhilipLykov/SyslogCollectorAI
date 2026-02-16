@@ -3,7 +3,7 @@ import { getDb } from '../../db/index.js';
 import { localTimestamp } from '../../config/index.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { PERMISSIONS, ALL_PERMISSIONS, invalidateRoleCache } from '../../middleware/permissions.js';
-import { writeAuditLog } from '../../middleware/audit.js';
+import { writeAuditLog, getActorName } from '../../middleware/audit.js';
 
 interface RoleRow {
   name: string;
@@ -118,6 +118,7 @@ export async function registerRoleRoutes(app: FastifyInstance): Promise<void> {
       invalidateRoleCache(roleName);
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'role_create',
         resource_type: 'role',
         resource_id: roleName,
@@ -201,6 +202,7 @@ export async function registerRoleRoutes(app: FastifyInstance): Promise<void> {
       invalidateRoleCache(roleName);
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'role_update',
         resource_type: 'role',
         resource_id: roleName,
@@ -251,6 +253,7 @@ export async function registerRoleRoutes(app: FastifyInstance): Promise<void> {
       invalidateRoleCache(roleName);
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'role_delete',
         resource_type: 'role',
         resource_id: roleName,

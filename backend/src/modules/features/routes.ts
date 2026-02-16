@@ -20,7 +20,7 @@ import {
   BACKUP_CONFIG_DEFAULTS,
 } from '../maintenance/backupJob.js';
 import { PRIVACY_FILTER_DEFAULTS, invalidatePrivacyFilterCache } from '../llm/llmPrivacyFilter.js';
-import { writeAuditLog } from '../../middleware/audit.js';
+import { writeAuditLog, getActorName } from '../../middleware/audit.js';
 import { getDefaultEventSource } from '../../services/eventSourceFactory.js';
 
 /**
@@ -170,6 +170,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
         const deleted = await query.del();
 
         await writeAuditLog(db, {
+          actor_name: getActorName(request),
           action: 'rag_history_delete',
           resource_type: 'rag_history',
           details: { deleted, system_id: system_id ?? null },
@@ -221,6 +222,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
       `, [key, JSON.stringify(value)]);
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'config_update',
         resource_type: 'app_config',
         details: { key },
@@ -337,6 +339,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
       invalidateAiConfigCache();
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'ai_config_update',
         resource_type: 'ai_config',
         details: { fields: updates.map(u => u.key) },
@@ -442,6 +445,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
       invalidateAiConfigCache();
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'prompt_update',
         resource_type: 'ai_prompts',
         details: { fields: promptFields.filter(f => f.val !== undefined).map(f => f.key) },
@@ -564,6 +568,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
       invalidateCriterionGuidelinesCache();
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'guideline_update',
         resource_type: 'ai_prompts',
         details: { criteria: updates.map(u => u.slug) },
@@ -778,6 +783,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
         `, [JSON.stringify(current)]);
 
         await writeAuditLog(db, {
+          actor_name: getActorName(request),
           action: 'config_update',
           resource_type: 'token_optimization',
           ip: request.ip,
@@ -809,6 +815,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
           });
 
         await writeAuditLog(db, {
+          actor_name: getActorName(_req),
           action: 'cache_invalidate',
           resource_type: 'score_cache',
           details: { cleared: result },
@@ -968,6 +975,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
         `, [JSON.stringify(current)]);
 
         await writeAuditLog(db, {
+          actor_name: getActorName(request),
           action: 'config_update',
           resource_type: 'meta_analysis_config',
           ip: request.ip,
@@ -1047,6 +1055,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
         `, [JSON.stringify(current)]);
 
         await writeAuditLog(db, {
+          actor_name: getActorName(request),
           action: 'config_update',
           resource_type: 'dashboard_config',
           ip: request.ip,
@@ -1147,6 +1156,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
         `, [JSON.stringify(current)]);
 
         await writeAuditLog(db, {
+          actor_name: getActorName(request),
           action: 'config_update',
           resource_type: 'pipeline_config',
           ip: request.ip,
@@ -1230,6 +1240,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
         `, [JSON.stringify(current)]);
 
         await writeAuditLog(db, {
+          actor_name: getActorName(request),
           action: 'config_update',
           resource_type: 'task_model_config',
           ip: request.ip,
@@ -1340,6 +1351,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
         }
 
         await writeAuditLog(db, {
+          actor_name: getActorName(request),
           action: 'config_update',
           resource_type: 'maintenance_config',
           ip: request.ip,
@@ -1366,6 +1378,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
       try {
         app.log.info(`[${localTimestamp()}] Manual maintenance run triggered`);
         await writeAuditLog(db, {
+          actor_name: getActorName(_req),
           action: 'maintenance_run',
           resource_type: 'maintenance',
           ip: _req.ip,
@@ -1490,6 +1503,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
         invalidateBackupConfigCache();
 
         await writeAuditLog(db, {
+          actor_name: getActorName(request),
           action: 'config_update',
           resource_type: 'backup_config',
           ip: request.ip,
@@ -1515,6 +1529,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
       try {
         app.log.info(`[${localTimestamp()}] Manual backup triggered`);
         await writeAuditLog(db, {
+          actor_name: getActorName(_req),
           action: 'backup_trigger',
           resource_type: 'backup',
           ip: _req.ip,
@@ -1590,6 +1605,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
       }
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'backup_delete',
         resource_type: 'backup',
         details: { filename },
@@ -1699,6 +1715,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
         invalidatePrivacyFilterCache();
 
         await writeAuditLog(db, {
+          actor_name: getActorName(request),
           action: 'config_update',
           resource_type: 'privacy_config',
           ip: request.ip,
@@ -1827,6 +1844,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
         );
 
         await writeAuditLog(db, {
+          actor_name: getActorName(request),
           action: 'events_bulk_delete',
           resource_type: 'events',
           details: { from, to, system_id, deleted_events: result.deleted_events },
@@ -1862,6 +1880,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
         const deleted = await db('rag_history').del();
 
         await writeAuditLog(db, {
+          actor_name: getActorName(request),
           action: 'rag_purge',
           resource_type: 'rag_history',
           details: { deleted },
@@ -1893,6 +1912,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
         const deleted = await db('llm_usage').del();
 
         await writeAuditLog(db, {
+          actor_name: getActorName(request),
           action: 'llm_usage_purge',
           resource_type: 'llm_usage',
           details: { deleted },

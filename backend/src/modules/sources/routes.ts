@@ -6,7 +6,7 @@ import { PERMISSIONS } from '../../middleware/permissions.js';
 import { localTimestamp } from '../../config/index.js';
 import { invalidateSourceCache } from '../ingest/sourceMatch.js';
 import type { CreateLogSourceBody, UpdateLogSourceBody } from '../../types/index.js';
-import { writeAuditLog } from '../../middleware/audit.js';
+import { writeAuditLog, getActorName } from '../../middleware/audit.js';
 
 /**
  * CRUD for log_sources.
@@ -90,6 +90,7 @@ export async function registerSourceRoutes(app: FastifyInstance): Promise<void> 
       app.log.info(`[${localTimestamp()}] Log source created: id=${id}, label="${label}"`);
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'source_create',
         resource_type: 'log_source',
         resource_id: id,
@@ -146,6 +147,7 @@ export async function registerSourceRoutes(app: FastifyInstance): Promise<void> 
       app.log.info(`[${localTimestamp()}] Log source updated: id=${id}`);
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'source_update',
         resource_type: 'log_source',
         resource_id: id,
@@ -179,6 +181,7 @@ export async function registerSourceRoutes(app: FastifyInstance): Promise<void> 
       app.log.info(`[${localTimestamp()}] Log source deleted: id=${id}`);
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'source_delete',
         resource_type: 'log_source',
         resource_id: id,

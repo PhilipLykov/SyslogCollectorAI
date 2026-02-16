@@ -5,7 +5,7 @@ import { requireAuth } from '../../middleware/auth.js';
 import { PERMISSIONS } from '../../middleware/permissions.js';
 import { localTimestamp } from '../../config/index.js';
 import { sendNotification, type AlertPayload } from './channels.js';
-import { writeAuditLog } from '../../middleware/audit.js';
+import { writeAuditLog, getActorName } from '../../middleware/audit.js';
 
 /**
  * Alerting API: CRUD for channels, rules, silences; alert history; test notification.
@@ -53,6 +53,7 @@ export async function registerAlertingRoutes(app: FastifyInstance): Promise<void
       app.log.info(`[${localTimestamp()}] Channel created: ${type}/${name} (${id})`);
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'channel_create',
         resource_type: 'notification_channel',
         resource_id: id,
@@ -85,6 +86,7 @@ export async function registerAlertingRoutes(app: FastifyInstance): Promise<void
       await db('notification_channels').where({ id }).update(updates);
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'channel_update',
         resource_type: 'notification_channel',
         resource_id: id,
@@ -118,6 +120,7 @@ export async function registerAlertingRoutes(app: FastifyInstance): Promise<void
       await db('notification_channels').where({ id }).del();
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'channel_delete',
         resource_type: 'notification_channel',
         resource_id: id,
@@ -213,6 +216,7 @@ export async function registerAlertingRoutes(app: FastifyInstance): Promise<void
       app.log.info(`[${localTimestamp()}] Rule created: ${body.trigger_type} (${id})`);
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'rule_create',
         resource_type: 'notification_rule',
         resource_id: id,
@@ -250,6 +254,7 @@ export async function registerAlertingRoutes(app: FastifyInstance): Promise<void
       await db('notification_rules').where({ id }).update(updates);
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'rule_update',
         resource_type: 'notification_rule',
         resource_id: id,
@@ -273,6 +278,7 @@ export async function registerAlertingRoutes(app: FastifyInstance): Promise<void
       await db('notification_rules').where({ id: request.params.id }).del();
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'rule_delete',
         resource_type: 'notification_rule',
         resource_id: request.params.id,
@@ -342,6 +348,7 @@ export async function registerAlertingRoutes(app: FastifyInstance): Promise<void
       app.log.info(`[${localTimestamp()}] Silence created: ${id}`);
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'silence_create',
         resource_type: 'silence',
         resource_id: id,
@@ -365,6 +372,7 @@ export async function registerAlertingRoutes(app: FastifyInstance): Promise<void
       await db('silences').where({ id: request.params.id }).del();
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'silence_delete',
         resource_type: 'silence',
         resource_id: request.params.id,

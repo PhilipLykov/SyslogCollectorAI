@@ -163,14 +163,8 @@ export async function runPerEventScoringJob(
       console.log(
         `[${localTimestamp()}] Per-event scoring: ${excludedCount} events excluded as normal behavior`,
       );
-      // Write zero scores for excluded events so they are marked as "scored"
-      for (const evt of excluded) {
-        const zeroScores: ScoreResult = {} as any;
-        for (const c of CRITERIA) {
-          (zeroScores as any)[c.slug] = 0;
-        }
-        await writeEventScores(db, evt.id, zeroScores);
-      }
+      // Mark excluded events as scored so they won't be re-fetched
+      await markEventsScored(db, excluded.map((e: any) => e.id));
       unscoredEvents = filtered;
     }
   }
@@ -296,6 +290,9 @@ export async function runPerEventScoringJob(
   let totalRequests = 0;
   let usedModel = '';
 
+  // Collect all event IDs that get scored in this run for bulk scored_at update
+  const allScoredEventIds: string[] = [];
+
   const allSkipped = [...severitySkipped, ...cacheHits, ...lowScoreSkipped];
   for (const { rep, score } of allSkipped) {
     try {
@@ -310,6 +307,7 @@ export async function runPerEventScoringJob(
             await writeEventScores(trx, le.id, score);
           }
         });
+        allScoredEventIds.push(...linkedEvents.map((le: any) => le.id));
         scored += linkedEvents.length;
       }
     } catch (err) {
@@ -398,6 +396,7 @@ export async function runPerEventScoringJob(
             }
           });
 
+          allScoredEventIds.push(...linkedEvents.map((le: any) => le.id));
           scored += linkedEvents.length;
         }
       } catch (err) {
@@ -406,6 +405,9 @@ export async function runPerEventScoringJob(
       }
     }
   }
+
+  // ── 5b. Mark all processed events as scored ──────────────
+  await markEventsScored(db, allScoredEventIds);
 
   // ── 6. Update template cache columns ────────────────────
 
@@ -461,14 +463,23 @@ export async function runPerEventScoringJob(
   return { scored, templates: representatives.length, errors };
 }
 
+/**
+ * Write non-zero event scores to the database.
+ * Zero-score rows are skipped to reduce event_scores table bloat (~60-80% reduction).
+ * The scored_at column on events tracks the "processed" state instead.
+ */
 async function writeEventScores(db: Knex, eventId: string, scores: ScoreResult): Promise<void> {
-  const rows = CRITERIA.map((c) => ({
-    id: uuidv4(),
-    event_id: eventId,
-    criterion_id: c.id,
-    score: (scores as any)[c.slug] ?? 0,
-    score_type: 'event',
-  }));
+  const rows = CRITERIA
+    .map((c) => ({
+      id: uuidv4(),
+      event_id: eventId,
+      criterion_id: c.id,
+      score: Number((scores as any)[c.slug]) || 0,
+      score_type: 'event',
+    }))
+    .filter((r) => r.score > 0);
+
+  if (rows.length === 0) return; // All criteria scored 0 — nothing to write
 
   const placeholders = rows.map(() => '(?, ?, ?, ?, ?)').join(', ');
   const values = rows.flatMap((r) => [r.id, r.event_id, r.criterion_id, r.score, r.score_type]);
@@ -478,4 +489,18 @@ async function writeEventScores(db: Knex, eventId: string, scores: ScoreResult):
     VALUES ${placeholders}
     ON CONFLICT (event_id, criterion_id, score_type) DO NOTHING
   `, values);
+}
+
+/**
+ * Mark events as scored by setting scored_at timestamp.
+ * This replaces the old approach of writing zero-score rows as a "processed" marker.
+ */
+async function markEventsScored(db: Knex, eventIds: string[]): Promise<void> {
+  if (eventIds.length === 0) return;
+  const CHUNK = 5000;
+  const now = new Date().toISOString();
+  for (let i = 0; i < eventIds.length; i += CHUNK) {
+    const chunk = eventIds.slice(i, i + CHUNK);
+    await db('events').whereIn('id', chunk).update({ scored_at: now });
+  }
 }

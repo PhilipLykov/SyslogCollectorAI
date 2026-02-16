@@ -14,11 +14,16 @@ const SENSITIVE_KEYS = new Set([
  * The `at` column uses DB-level NOW() for correct timestamptz handling.
  *
  * Supports optional `user_id` and `session_id` for traceability.
+ *
+ * `actor` should be a human-readable name (username, API key name).
+ * If not provided, falls back to `actor_name` or `user_id`.
  */
 export async function writeAuditLog(
   db: Knex,
   entry: {
     actor?: string;
+    /** Human-readable actor name (username or API key name). */
+    actor_name?: string;
     action: string;
     resource_type: string;
     resource_id?: string;
@@ -31,8 +36,7 @@ export async function writeAuditLog(
   try {
     await db('audit_log').insert({
       id: uuidv4(),
-      // Let the DB default (knex.fn.now()) handle timestamptz correctly
-      actor: entry.actor ?? entry.user_id ?? null,
+      actor: entry.actor ?? entry.actor_name ?? entry.user_id ?? null,
       action: entry.action,
       resource_type: entry.resource_type,
       resource_id: entry.resource_id ?? null,
@@ -45,6 +49,15 @@ export async function writeAuditLog(
     // Audit logging should never break the main flow
     console.error(`[${localTimestamp()}] Audit log write failed:`, err);
   }
+}
+
+/**
+ * Helper to extract actor_name from a Fastify request.
+ * Resolves to: username (session auth) > API key name (key auth) > undefined.
+ */
+export function getActorName(request: any): string | undefined {
+  return request.currentUser?.username ?? request.currentUser?.display_name
+    ?? request.apiKey?.name ?? undefined;
 }
 
 /**

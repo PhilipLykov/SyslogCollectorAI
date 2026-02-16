@@ -4,7 +4,7 @@ import { getDb } from '../../db/index.js';
 import { localTimestamp } from '../../config/index.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { PERMISSIONS } from '../../middleware/permissions.js';
-import { writeAuditLog } from '../../middleware/audit.js';
+import { writeAuditLog, getActorName } from '../../middleware/audit.js';
 import { generateApiKey, hashApiKey } from '../../middleware/apiKeys.js';
 import type { ApiKeyScope } from '../../types/index.js';
 
@@ -79,6 +79,7 @@ export async function registerApiKeyRoutes(app: FastifyInstance): Promise<void> 
       });
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'api_key_create',
         resource_type: 'api_key',
         resource_id: id,
@@ -147,6 +148,7 @@ export async function registerApiKeyRoutes(app: FastifyInstance): Promise<void> 
         .first();
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'api_key_update',
         resource_type: 'api_key',
         resource_id: request.params.id,
@@ -172,6 +174,7 @@ export async function registerApiKeyRoutes(app: FastifyInstance): Promise<void> 
       await db('api_keys').where({ id: request.params.id }).update({ is_active: false });
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'api_key_revoke',
         resource_type: 'api_key',
         resource_id: request.params.id,

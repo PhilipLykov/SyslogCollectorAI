@@ -272,10 +272,24 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
       // Score, severity_label, reason_codes are NOT in GROUP BY — they use aggregates
       // so that all events of the same template are combined into one group regardless
       // of minor score variations across scoring runs.
+
+      // Load dashboard config for time window (enables partition pruning on events table)
+      let scoreWindowDays = 7;
+      try {
+        const dashCfg = await db('app_config').where({ key: 'dashboard_config' }).first('value');
+        if (dashCfg?.value) {
+          const parsed = typeof dashCfg.value === 'string' ? JSON.parse(dashCfg.value) : dashCfg.value;
+          const d = Number(parsed.score_display_window_days);
+          if (d > 0 && d <= 90) scoreWindowDays = d;
+        }
+      } catch { /* use default */ }
+      const scoreSince = new Date(Date.now() - scoreWindowDays * 86_400_000).toISOString();
+
       const groupQuery = db('event_scores')
         .joinRaw('JOIN events ON event_scores.event_id = events.id::text')
         .join('criteria', 'event_scores.criterion_id', 'criteria.id')
         .where('events.system_id', systemId)
+        .where('events.timestamp', '>=', scoreSince)
         .where('event_scores.score_type', 'event');
 
       // By default hide acknowledged events; show them only when toggled on

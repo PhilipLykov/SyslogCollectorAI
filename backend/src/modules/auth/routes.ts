@@ -13,7 +13,7 @@ import {
   computeLockout,
   resetLockout,
 } from '../../middleware/passwords.js';
-import { writeAuditLog } from '../../middleware/audit.js';
+import { writeAuditLog, getActorName } from '../../middleware/audit.js';
 import type { UserRow } from '../../types/index.js';
 
 const SESSION_EXPIRY_HOURS = 24;
@@ -47,6 +47,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       if (!user) {
         // Generic error to avoid user enumeration (OWASP A07)
         await writeAuditLog(db, {
+          actor_name: (username ?? '').trim().toLowerCase(),
           action: 'login_fail',
           resource_type: 'auth',
           details: { username: username.trim().toLowerCase(), reason: 'unknown_user' },
@@ -58,6 +59,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       // Check account active
       if (!user.is_active) {
         await writeAuditLog(db, {
+          actor_name: username,
           action: 'login_fail',
           resource_type: 'auth',
           details: { reason: 'account_disabled' },
@@ -71,6 +73,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       const lockout = isAccountLocked(user.locked_until ?? null);
       if (lockout.locked) {
         await writeAuditLog(db, {
+          actor_name: username,
           action: 'login_fail',
           resource_type: 'auth',
           details: { reason: 'account_locked', remaining_seconds: Math.ceil(lockout.remainingMs / 1000) },
@@ -90,6 +93,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
         await db('users').where({ id: user.id }).update(lockState);
 
         await writeAuditLog(db, {
+          actor_name: username,
           action: 'login_fail',
           resource_type: 'auth',
           details: {
@@ -137,6 +141,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       });
 
       await writeAuditLog(db, {
+        actor_name: username,
         action: 'login',
         resource_type: 'auth',
         ip: request.ip,
@@ -171,6 +176,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
         await db('sessions').where({ id: request.currentSession.id }).del();
 
         await writeAuditLog(db, {
+          actor_name: getActorName(request),
           action: 'logout',
           resource_type: 'auth',
           ip: request.ip,
@@ -239,6 +245,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       const valid = await verifyPassword(current_password, request.currentUser.password_hash);
       if (!valid) {
         await writeAuditLog(db, {
+          actor_name: getActorName(request),
           action: 'password_change_fail',
           resource_type: 'user',
           resource_id: request.currentUser.id,
@@ -270,6 +277,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
         .del();
 
       await writeAuditLog(db, {
+        actor_name: getActorName(request),
         action: 'password_change',
         resource_type: 'user',
         resource_id: request.currentUser.id,
