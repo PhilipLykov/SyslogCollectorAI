@@ -8,6 +8,10 @@ import type { Knex } from 'knex';
  * 2. Add functional index on events((id::text)) for efficient JOINs with event_scores.
  * 3. Add missing indexes on event_scores, windows, findings.
  * 4. Backfill scored_at for events that already have scores.
+ *
+ * NOTE: All indexes use plain CREATE INDEX (not CONCURRENTLY) because Knex
+ * runs migrations inside a transaction, and PostgreSQL does not allow
+ * CREATE INDEX CONCURRENTLY inside a transaction block.
  */
 export async function up(knex: Knex): Promise<void> {
   // ── 1. Add scored_at column to events ───────────────────────
@@ -22,94 +26,48 @@ export async function up(knex: Knex): Promise<void> {
   }
 
   // ── 2. Partial index for unscored events (hot path: scoring pipeline) ──
-  try {
-    await knex.raw(`
-      CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_events_unscored
-      ON events (system_id, "timestamp")
-      WHERE scored_at IS NULL AND acknowledged_at IS NULL
-    `);
-    console.log('[Migration 025] Created idx_events_unscored');
-  } catch (err: any) {
-    // CONCURRENTLY may fail inside a transaction; fall back
-    try {
-      await knex.raw(`
-        CREATE INDEX IF NOT EXISTS idx_events_unscored
-        ON events (system_id, "timestamp")
-        WHERE scored_at IS NULL AND acknowledged_at IS NULL
-      `);
-      console.log('[Migration 025] Created idx_events_unscored (non-concurrent)');
-    } catch { console.warn('[Migration 025] idx_events_unscored already exists or failed'); }
-  }
+  await knex.raw(`
+    CREATE INDEX IF NOT EXISTS idx_events_unscored
+    ON events (system_id, "timestamp")
+    WHERE scored_at IS NULL AND acknowledged_at IS NULL
+  `);
+  console.log('[Migration 025] Created idx_events_unscored');
 
   // ── 3. Functional index for id::text JOINs ──────────────────
-  try {
-    await knex.raw(`
-      CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_events_id_text
-      ON events ((id::text))
-    `);
-    console.log('[Migration 025] Created idx_events_id_text');
-  } catch (err: any) {
-    try {
-      await knex.raw(`
-        CREATE INDEX IF NOT EXISTS idx_events_id_text
-        ON events ((id::text))
-      `);
-      console.log('[Migration 025] Created idx_events_id_text (non-concurrent)');
-    } catch { console.warn('[Migration 025] idx_events_id_text already exists or failed'); }
-  }
+  await knex.raw(`
+    CREATE INDEX IF NOT EXISTS idx_events_id_text
+    ON events ((id::text))
+  `);
+  console.log('[Migration 025] Created idx_events_id_text');
 
   // ── 4. Missing index: event_scores(event_id) for DELETE operations ──
-  try {
-    await knex.raw(`
-      CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_event_scores_event_id
-      ON event_scores (event_id)
-    `);
-    console.log('[Migration 025] Created idx_event_scores_event_id');
-  } catch {
-    try {
-      await knex.raw(`CREATE INDEX IF NOT EXISTS idx_event_scores_event_id ON event_scores (event_id)`);
-    } catch { console.warn('[Migration 025] idx_event_scores_event_id failed'); }
-  }
+  await knex.raw(`
+    CREATE INDEX IF NOT EXISTS idx_event_scores_event_id
+    ON event_scores (event_id)
+  `);
+  console.log('[Migration 025] Created idx_event_scores_event_id');
 
   // ── 5. Covering index for MAX(score) aggregation pattern ────
-  try {
-    await knex.raw(`
-      CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_event_scores_eid_crit_score
-      ON event_scores (event_id, criterion_id, score DESC)
-    `);
-    console.log('[Migration 025] Created idx_event_scores_eid_crit_score');
-  } catch {
-    try {
-      await knex.raw(`CREATE INDEX IF NOT EXISTS idx_event_scores_eid_crit_score ON event_scores (event_id, criterion_id, score DESC)`);
-    } catch { console.warn('[Migration 025] idx_event_scores_eid_crit_score failed'); }
-  }
+  await knex.raw(`
+    CREATE INDEX IF NOT EXISTS idx_event_scores_eid_crit_score
+    ON event_scores (event_id, criterion_id, score DESC)
+  `);
+  console.log('[Migration 025] Created idx_event_scores_eid_crit_score');
 
   // ── 6. Windows: system + to_ts for dashboard and recalc queries ──
-  try {
-    await knex.raw(`
-      CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_windows_system_to_ts
-      ON windows (system_id, to_ts DESC)
-    `);
-    console.log('[Migration 025] Created idx_windows_system_to_ts');
-  } catch {
-    try {
-      await knex.raw(`CREATE INDEX IF NOT EXISTS idx_windows_system_to_ts ON windows (system_id, to_ts DESC)`);
-    } catch { console.warn('[Migration 025] idx_windows_system_to_ts failed'); }
-  }
+  await knex.raw(`
+    CREATE INDEX IF NOT EXISTS idx_windows_system_to_ts
+    ON windows (system_id, to_ts DESC)
+  `);
+  console.log('[Migration 025] Created idx_windows_system_to_ts');
 
   // ── 7. Findings: resolved detection ─────────────────────────
-  try {
-    await knex.raw(`
-      CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_findings_system_resolved
-      ON findings (system_id, resolved_at DESC)
-      WHERE status = 'resolved'
-    `);
-    console.log('[Migration 025] Created idx_findings_system_resolved');
-  } catch {
-    try {
-      await knex.raw(`CREATE INDEX IF NOT EXISTS idx_findings_system_resolved ON findings (system_id, resolved_at DESC) WHERE status = 'resolved'`);
-    } catch { console.warn('[Migration 025] idx_findings_system_resolved failed'); }
-  }
+  await knex.raw(`
+    CREATE INDEX IF NOT EXISTS idx_findings_system_resolved
+    ON findings (system_id, resolved_at DESC)
+    WHERE status = 'resolved'
+  `);
+  console.log('[Migration 025] Created idx_findings_system_resolved');
 
   // ── 8. Backfill scored_at for events that already have event_scores ──
   // This marks existing scored events so the pipeline doesn't re-process them.

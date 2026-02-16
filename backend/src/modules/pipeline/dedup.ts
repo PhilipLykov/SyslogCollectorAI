@@ -69,16 +69,22 @@ export interface TemplateRepresentative {
  *
  * Each template upsert + event linking is wrapped in a transaction so that
  * the template's occurrence_count stays consistent with linked events.
+ *
+ * Supports both PG-backed events (stored in the `events` table with UUID IDs)
+ * and ES-backed events (stored in Elasticsearch with string IDs; metadata in
+ * `es_event_metadata`).  The `esSystemIds` set controls which system IDs
+ * are treated as ES-backed.
  */
 export async function extractTemplatesAndDedup(
   db: Knex,
-  eventRows: Array<{ id: string; system_id: string; message: string }>,
+  eventRows: Array<{ id: string; system_id: string; message: string; timestamp?: string }>,
+  esSystemIds?: Set<string>,
 ): Promise<TemplateRepresentative[]> {
   // Group events by parameterized template
   const groups = new Map<string, {
     templateText: string;
     systemId: string;
-    events: Array<{ id: string; message: string }>;
+    events: Array<{ id: string; message: string; timestamp?: string }>;
   }>();
 
   for (const event of eventRows) {
@@ -92,7 +98,7 @@ export async function extractTemplatesAndDedup(
         events: [],
       });
     }
-    groups.get(patternHash)!.events.push({ id: event.id, message: event.message });
+    groups.get(patternHash)!.events.push({ id: event.id, message: event.message, timestamp: event.timestamp });
   }
 
   const representatives: TemplateRepresentative[] = [];
@@ -101,6 +107,7 @@ export async function extractTemplatesAndDedup(
     const { templateText, systemId, events } = group;
     const count = events.length;
     const now = new Date().toISOString();
+    const isEs = esSystemIds?.has(systemId) ?? false;
 
     // Wrap upsert + event linking in a transaction for consistency
     const templateId = await db.transaction(async (trx) => {
@@ -116,11 +123,33 @@ export async function extractTemplatesAndDedup(
 
       const tplId = result.rows[0]?.id ?? newId;
 
-      // Link events to template
+      // Link events to template — use the correct table based on event source
       const eventIds = events.map((e) => e.id);
-      for (let i = 0; i < eventIds.length; i += 100) {
-        const chunk = eventIds.slice(i, i + 100);
-        await trx('events').whereIn('id', chunk).update({ template_id: tplId });
+      if (isEs) {
+        // ES events: upsert template_id + event_timestamp into es_event_metadata
+        // Build a map of event ID → timestamp for this group
+        const tsMap = new Map<string, string | null>();
+        for (const e of events) {
+          tsMap.set(e.id, e.timestamp ?? null);
+        }
+        for (let i = 0; i < eventIds.length; i += 100) {
+          const chunk = eventIds.slice(i, i + 100);
+          const placeholders = chunk.map(() => '(?, ?, ?, ?)').join(', ');
+          const values = chunk.flatMap((eid) => [systemId, eid, tplId, tsMap.get(eid) ?? null]);
+          await trx.raw(`
+            INSERT INTO es_event_metadata (system_id, es_event_id, template_id, event_timestamp)
+            VALUES ${placeholders}
+            ON CONFLICT (system_id, es_event_id)
+            DO UPDATE SET template_id = EXCLUDED.template_id,
+                          event_timestamp = COALESCE(EXCLUDED.event_timestamp, es_event_metadata.event_timestamp)
+          `, values);
+        }
+      } else {
+        // PG events: update the events table directly
+        for (let i = 0; i < eventIds.length; i += 100) {
+          const chunk = eventIds.slice(i, i + 100);
+          await trx('events').whereIn('id', chunk).update({ template_id: tplId });
+        }
       }
 
       return tplId;

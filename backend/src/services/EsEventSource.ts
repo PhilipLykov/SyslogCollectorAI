@@ -417,24 +417,27 @@ export class EsEventSource implements EventSource {
     systemId: string | undefined,
     limit: number,
   ): Promise<LogEvent[]> {
-    // For ES, "unscored" means events that don't have a corresponding
-    // row in event_scores. We first get recent events from ES, then
-    // filter out those already scored in PG.
+    // For ES, "unscored" means events that don't have:
+    //   1. A scored_at timestamp in es_event_metadata, OR
+    //   2. A corresponding row in event_scores (legacy fallback).
+    // We first get recent events from ES, then filter against PG metadata.
     const client = await this.getClient();
     const base = this.baseQuery();
     const filter: any[] = [];
     if ((base.query as any)?.bool?.must) filter.push(...(base.query as any).bool.must);
 
-    // Only look at last 24h to bound the search
-    const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    // Only look at last 48h to bound the search (aligned with PG getUnscoredEvents)
+    const since = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
     filter.push({ range: { [this.esField('timestamp')]: { gte: since } } });
 
-    // Exclude acknowledged events
-    const ackIds = await this.db('es_event_metadata')
+    // Fetch metadata for this system: events that are acknowledged OR already scored
+    const metaRows = await this.db('es_event_metadata')
       .where({ system_id: this.systemId })
-      .whereNotNull('acknowledged_at')
+      .where(function (this: any) {
+        this.whereNotNull('acknowledged_at').orWhereNotNull('scored_at');
+      })
       .select('es_event_id');
-    const ackIdSet = new Set(ackIds.map((r: any) => r.es_event_id));
+    const excludeSet = new Set(metaRows.map((r: any) => r.es_event_id));
 
     // Fetch a larger batch and filter locally
     const fetchSize = Math.min(limit * 3, 1000);
@@ -449,8 +452,11 @@ export class EsEventSource implements EventSource {
     const hits = (result.hits?.hits ?? []);
     const candidateEvents = hits.map((h: any) => this.hitToLogEvent(h));
 
-    // Filter out acknowledged and already-scored events
-    const candidateIds = candidateEvents.map((e) => e.id);
+    // For events not in metadata, also check event_scores as a fallback
+    // (handles events scored before migration 026 that don't have scored_at)
+    const candidateIds = candidateEvents
+      .filter((e) => !excludeSet.has(e.id))
+      .map((e) => e.id);
     const scoredRows = candidateIds.length > 0
       ? await this.db('event_scores')
           .whereIn('event_id', candidateIds)
@@ -461,7 +467,7 @@ export class EsEventSource implements EventSource {
 
     const unscored: LogEvent[] = [];
     for (const evt of candidateEvents) {
-      if (ackIdSet.has(evt.id)) continue;
+      if (excludeSet.has(evt.id)) continue;
       if (scoredSet.has(evt.id)) continue;
       unscored.push(evt);
       if (unscored.length >= limit) break;
@@ -607,7 +613,7 @@ export class EsEventSource implements EventSource {
 
   async unacknowledgeEvents(filters: AckFilters): Promise<number> {
     // Match the time range by querying ES for the matching IDs first,
-    // then clear ack in PG's es_event_metadata.
+    // then clear ack + scored_at in PG's es_event_metadata and delete event_scores.
     const client = await this.getClient();
     const base = this.baseQuery();
     const esFilter: any[] = [];
@@ -631,7 +637,7 @@ export class EsEventSource implements EventSource {
     const eventIds = (result.hits?.hits ?? []).map((h: any) => h._id as string);
     if (eventIds.length === 0) return 0;
 
-    // Clear acknowledged_at for these IDs
+    // Clear acknowledged_at AND scored_at so the pipeline re-scores these events
     let totalUnacked = 0;
     for (let i = 0; i < eventIds.length; i += 500) {
       const chunk = eventIds.slice(i, i + 500);
@@ -639,8 +645,16 @@ export class EsEventSource implements EventSource {
         .where({ system_id: this.systemId })
         .whereIn('es_event_id', chunk)
         .whereNotNull('acknowledged_at')
-        .update({ acknowledged_at: null });
+        .update({ acknowledged_at: null, scored_at: null });
       totalUnacked += updated;
+    }
+
+    // Delete existing event_scores so the scoring pipeline re-scores these events
+    for (let i = 0; i < eventIds.length; i += 500) {
+      const chunk = eventIds.slice(i, i + 500);
+      await this.db('event_scores')
+        .whereIn('event_id', chunk)
+        .del();
     }
 
     return totalUnacked;

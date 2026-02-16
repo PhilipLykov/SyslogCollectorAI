@@ -128,10 +128,14 @@ export async function runPerEventScoringJob(
 
   // 1. Fetch unscored, unacknowledged events — via EventSource abstraction
   //    Dispatch to each system's event source to support ES-backed systems.
+  //    Track which systems are ES-backed for downstream handling.
   let unscoredEvents: any[];
+  const esSystemIds = new Set<string>(); // system IDs backed by Elasticsearch
+
   if (options?.systemId) {
     // Single system — use its specific event source
     const system = await db('monitored_systems').where({ id: options.systemId }).first();
+    if (system?.event_source === 'elasticsearch') esSystemIds.add(system.id);
     const es = system ? getEventSource(system, db) : getDefaultEventSource(db);
     unscoredEvents = await es.getUnscoredEvents(options.systemId, limit);
   } else {
@@ -140,6 +144,7 @@ export async function runPerEventScoringJob(
     unscoredEvents = [];
     const perSystemLimit = Math.max(10, Math.floor(limit / Math.max(systems.length, 1)));
     for (const sys of systems) {
+      if (sys.event_source === 'elasticsearch') esSystemIds.add(sys.id);
       const es = getEventSource(sys, db);
       const batch = await es.getUnscoredEvents(sys.id, perSystemLimit);
       unscoredEvents.push(...batch);
@@ -164,7 +169,7 @@ export async function runPerEventScoringJob(
         `[${localTimestamp()}] Per-event scoring: ${excludedCount} events excluded as normal behavior`,
       );
       // Mark excluded events as scored so they won't be re-fetched
-      await markEventsScored(db, excluded.map((e: any) => e.id));
+      await markEventsScored(db, excluded, esSystemIds);
       unscoredEvents = filtered;
     }
   }
@@ -176,8 +181,8 @@ export async function runPerEventScoringJob(
 
   const unscoredEventIds = new Set(unscoredEvents.map((e: any) => e.id));
 
-  // 2. Dedup / template extraction
-  const representatives = await extractTemplatesAndDedup(db, unscoredEvents);
+  // 2. Dedup / template extraction (pass esSystemIds so ES events are linked via es_event_metadata)
+  const representatives = await extractTemplatesAndDedup(db, unscoredEvents, esSystemIds);
 
   // Build event lookup map
   const eventMap = new Map(unscoredEvents.map((e: any) => [e.id, e]));
@@ -290,25 +295,25 @@ export async function runPerEventScoringJob(
   let totalRequests = 0;
   let usedModel = '';
 
-  // Collect all event IDs that get scored in this run for bulk scored_at update
-  const allScoredEventIds: string[] = [];
+  // Collect all event objects that get scored in this run for bulk scored_at update
+  const allScoredEvents: Array<{ id: string; system_id: string }> = [];
 
   const allSkipped = [...severitySkipped, ...cacheHits, ...lowScoreSkipped];
   for (const { rep, score } of allSkipped) {
     try {
-      const linkedEvents = await db('events')
-        .where({ template_id: rep.templateId })
-        .whereIn('id', Array.from(unscoredEventIds))
-        .select('id');
+      const sysId = rep.systemId ?? '';
+      const linkedEventIds = await findLinkedEventIds(
+        db, rep.templateId, unscoredEventIds, sysId, esSystemIds,
+      );
 
-      if (linkedEvents.length > 0) {
+      if (linkedEventIds.length > 0) {
         await db.transaction(async (trx) => {
-          for (const le of linkedEvents) {
-            await writeEventScores(trx, le.id, score);
+          for (const eid of linkedEventIds) {
+            await writeEventScores(trx, eid, score);
           }
         });
-        allScoredEventIds.push(...linkedEvents.map((le: any) => le.id));
-        scored += linkedEvents.length;
+        allScoredEvents.push(...linkedEventIds.map((eid) => ({ id: eid, system_id: sysId })));
+        scored += linkedEventIds.length;
       }
     } catch (err) {
       console.error(`[${localTimestamp()}] Error writing cached/skipped scores for template ${rep.templateId}:`, err);
@@ -385,19 +390,19 @@ export async function runPerEventScoringJob(
 
           freshScores.set(rep.templateId, scoreResult);
 
-          const linkedEvents = await db('events')
-            .where({ template_id: rep.templateId })
-            .whereIn('id', Array.from(unscoredEventIds))
-            .select('id');
+          const repSysId = rep.systemId ?? '';
+          const linkedEventIds = await findLinkedEventIds(
+            db, rep.templateId, unscoredEventIds, repSysId, esSystemIds,
+          );
 
           await db.transaction(async (trx) => {
-            for (const le of linkedEvents) {
-              await writeEventScores(trx, le.id, scoreResult);
+            for (const eid of linkedEventIds) {
+              await writeEventScores(trx, eid, scoreResult);
             }
           });
 
-          allScoredEventIds.push(...linkedEvents.map((le: any) => le.id));
-          scored += linkedEvents.length;
+          allScoredEvents.push(...linkedEventIds.map((eid) => ({ id: eid, system_id: repSysId })));
+          scored += linkedEventIds.length;
         }
       } catch (err) {
         console.error(`[${localTimestamp()}] Per-event scoring error for system ${systemId}:`, err);
@@ -407,7 +412,7 @@ export async function runPerEventScoringJob(
   }
 
   // ── 5b. Mark all processed events as scored ──────────────
-  await markEventsScored(db, allScoredEventIds);
+  await markEventsScored(db, allScoredEvents, esSystemIds);
 
   // ── 6. Update template cache columns ────────────────────
 
@@ -492,15 +497,83 @@ async function writeEventScores(db: Knex, eventId: string, scores: ScoreResult):
 }
 
 /**
+ * Find event IDs linked to a template that are in the unscored set.
+ *
+ * For PG-backed systems, queries the `events` table (template_id column).
+ * For ES-backed systems, queries `es_event_metadata` (template_id column)
+ * because ES event IDs are not UUIDs and don't exist in the PG events table.
+ */
+async function findLinkedEventIds(
+  db: Knex,
+  templateId: string,
+  unscoredEventIds: Set<string>,
+  systemId: string,
+  esSystemIds: Set<string>,
+): Promise<string[]> {
+  if (esSystemIds.has(systemId)) {
+    // ES-backed: query es_event_metadata for linked ES events
+    const rows = await db('es_event_metadata')
+      .where({ system_id: systemId, template_id: templateId })
+      .whereIn('es_event_id', Array.from(unscoredEventIds))
+      .select('es_event_id');
+    return rows.map((r: any) => r.es_event_id);
+  }
+  // PG-backed: query the events table
+  const rows = await db('events')
+    .where({ template_id: templateId })
+    .whereIn('id', Array.from(unscoredEventIds))
+    .select('id');
+  return rows.map((r: any) => r.id);
+}
+
+/**
  * Mark events as scored by setting scored_at timestamp.
  * This replaces the old approach of writing zero-score rows as a "processed" marker.
+ *
+ * Handles both PG events (updates `events.scored_at`) and ES events
+ * (upserts `es_event_metadata.scored_at`).
  */
-async function markEventsScored(db: Knex, eventIds: string[]): Promise<void> {
-  if (eventIds.length === 0) return;
+async function markEventsScored(
+  db: Knex,
+  events: Array<{ id: string; system_id: string }>,
+  esSystemIds: Set<string>,
+): Promise<void> {
+  if (events.length === 0) return;
   const CHUNK = 5000;
   const now = new Date().toISOString();
-  for (let i = 0; i < eventIds.length; i += CHUNK) {
-    const chunk = eventIds.slice(i, i + CHUNK);
+
+  // Split into PG events and ES events
+  const pgIds: string[] = [];
+  const esBySystem = new Map<string, string[]>();
+
+  for (const evt of events) {
+    if (esSystemIds.has(evt.system_id)) {
+      let list = esBySystem.get(evt.system_id);
+      if (!list) { list = []; esBySystem.set(evt.system_id, list); }
+      list.push(evt.id);
+    } else {
+      pgIds.push(evt.id);
+    }
+  }
+
+  // PG events: update events.scored_at
+  for (let i = 0; i < pgIds.length; i += CHUNK) {
+    const chunk = pgIds.slice(i, i + CHUNK);
     await db('events').whereIn('id', chunk).update({ scored_at: now });
+  }
+
+  // ES events: upsert es_event_metadata.scored_at
+  for (const [systemId, ids] of esBySystem) {
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const chunk = ids.slice(i, i + CHUNK);
+      const placeholders = chunk.map(() => '(?, ?, ?)').join(', ');
+      const values = chunk.flatMap((eid) => [systemId, eid, now]);
+      await db.raw(`
+        INSERT INTO es_event_metadata (system_id, es_event_id, scored_at)
+        VALUES ${placeholders}
+        ON CONFLICT (system_id, es_event_id)
+        DO UPDATE SET scored_at = EXCLUDED.scored_at
+      `, values);
+    }
   }
 }

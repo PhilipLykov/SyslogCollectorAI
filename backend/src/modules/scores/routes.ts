@@ -129,12 +129,16 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
 
       if (isEsBacked) {
         // For ES-backed systems, event_scores.event_id contains ES _id strings
-        // which don't exist in the PG events table.  Query scores directly,
-        // then hydrate event data from Elasticsearch.
+        // which don't exist in the PG events table.  Join with es_event_metadata
+        // to filter by system_id (event_scores has no system_id column).
         let scoreQuery = db('event_scores')
+          .join('es_event_metadata', function () {
+            this.on('event_scores.event_id', '=', 'es_event_metadata.es_event_id')
+              .andOn('es_event_metadata.system_id', '=', db.raw('?', [systemId]));
+          })
           .join('criteria', 'event_scores.criterion_id', 'criteria.id')
-          .where('event_scores.system_id', systemId)
           .where('event_scores.score_type', 'event')
+          .whereNull('es_event_metadata.acknowledged_at')
           .orderBy('event_scores.score', 'desc')
           .limit(limit)
           .select(
@@ -158,15 +162,14 @@ export async function registerScoresRoutes(app: FastifyInstance): Promise<void> 
         // Hydrate event fields from ES (best-effort; if ES is down, return scores without event data)
         try {
           const eventSource = getEventSource(system, db);
-          const eventIds = scoreRows.map((r: any) => r.event_id);
+          const eventIds = [...new Set(scoreRows.map((r: any) => r.event_id))];
           if (eventIds.length > 0) {
-            // Fetch events by searching for these IDs
-            const events = await eventSource.searchEvents({
-              system_id: systemId,
+            // Fetch specific events by ID from ES
+            const esEvents = await eventSource.getSystemEvents(systemId, {
               limit: eventIds.length,
-              page: 1,
+              event_ids: eventIds,
             });
-            const eventMap = new Map(events.events.map((e: any) => [e.id, e]));
+            const eventMap = new Map(esEvents.map((e: any) => [e.id, e]));
 
             rows = scoreRows.map((r: any) => {
               const evt = eventMap.get(r.event_id);

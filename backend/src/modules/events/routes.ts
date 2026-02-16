@@ -15,6 +15,10 @@ const DEFAULT_W_META = 0.7;
  *
  * Uses a single SQL CTE+UPDATE instead of a nested loop over windows x criteria
  * (previously ~36,000 queries, now 1 query).
+ *
+ * Supports both PG-backed systems (events in `events` table) and ES-backed
+ * systems (events tracked via `es_event_metadata`).  The LATERAL subquery
+ * uses a UNION to find max scores from both sources.
  */
 async function recalcEffectiveScores(db: ReturnType<typeof getDb>, systemId: string | null): Promise<number> {
   let windowDays = 7;
@@ -32,6 +36,11 @@ async function recalcEffectiveScores(db: ReturnType<typeof getDb>, systemId: str
   // Single CTE query: for every effective_scores row in the display range,
   // recalculate max_event_score from un-acknowledged events, then apply
   // the zero-meta rule and blending formula.
+  //
+  // The LATERAL subquery has two UNION branches:
+  //   1. PG events: JOIN events → event_scores (WHERE acknowledged_at IS NULL)
+  //   2. ES events: JOIN es_event_metadata → event_scores (WHERE acknowledged_at IS NULL)
+  // This ensures both storage backends contribute to effective scores.
   const result = await db.raw(`
     WITH window_max AS (
       SELECT
@@ -43,15 +52,30 @@ async function recalcEffectiveScores(db: ReturnType<typeof getDb>, systemId: str
       FROM effective_scores eff
       JOIN windows w ON eff.window_id = w.id
       LEFT JOIN LATERAL (
-        SELECT MAX(es.score) AS max_score
-        FROM events e
-        JOIN event_scores es ON es.event_id = e.id::text
-        WHERE e.system_id = eff.system_id
-          AND e.timestamp >= w.from_ts
-          AND e.timestamp <= w.to_ts
-          AND e.acknowledged_at IS NULL
-          AND es.criterion_id = eff.criterion_id
-          AND es.score_type = 'event'
+        SELECT MAX(combined.score) AS max_score
+        FROM (
+          -- PG events path
+          SELECT es.score
+          FROM events e
+          JOIN event_scores es ON es.event_id = e.id::text
+          WHERE e.system_id = eff.system_id
+            AND e.timestamp >= w.from_ts
+            AND e.timestamp <= w.to_ts
+            AND e.acknowledged_at IS NULL
+            AND es.criterion_id = eff.criterion_id
+            AND es.score_type = 'event'
+          UNION ALL
+          -- ES events path (metadata tracked in es_event_metadata)
+          SELECT es.score
+          FROM es_event_metadata em
+          JOIN event_scores es ON es.event_id = em.es_event_id
+          WHERE em.system_id = eff.system_id
+            AND em.event_timestamp >= w.from_ts
+            AND em.event_timestamp <= w.to_ts
+            AND em.acknowledged_at IS NULL
+            AND es.criterion_id = eff.criterion_id
+            AND es.score_type = 'event'
+        ) combined
       ) sub ON true
       WHERE w.to_ts >= ?
         AND (? IS NULL OR eff.system_id = ?)
@@ -324,6 +348,7 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
         let transitionedFindings = 0;
         try {
           // Get the messages of the acknowledged events for matching
+          // PG events: query events table directly
           let msgQuery = db('events')
             .whereNotNull('acknowledged_at')
             .where('timestamp', '<=', toTs);
@@ -331,6 +356,31 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
           if (system_id) msgQuery = msgQuery.where('system_id', system_id);
           const ackedRows = await msgQuery.distinct('message').limit(500);
           const ackedMsgs = ackedRows.map((r: any) => String(r.message || ''));
+
+          // ES events: also fetch messages from Elasticsearch for ES-backed systems
+          if (system_id) {
+            const sys = await db('monitored_systems').where({ id: system_id }).first();
+            if (sys?.event_source === 'elasticsearch') {
+              try {
+                const esSource = getEventSource(sys, db);
+                const esAckedIds = await db('es_event_metadata')
+                  .where({ system_id })
+                  .whereNotNull('acknowledged_at')
+                  .select('es_event_id')
+                  .limit(200);
+                if (esAckedIds.length > 0) {
+                  const esEvents = await esSource.getSystemEvents(system_id, {
+                    limit: Math.min(esAckedIds.length, 200),
+                    event_ids: esAckedIds.map((r: any) => r.es_event_id),
+                  });
+                  for (const evt of esEvents) {
+                    if (evt.message) ackedMsgs.push(String(evt.message));
+                  }
+                }
+              } catch { /* ES unavailable — skip */ }
+            }
+          }
+
           transitionedFindings = await transitionFindingsOnAck(db, system_id || null, ackedMsgs);
         } catch (err: any) {
           app.log.error(`[${localTimestamp()}] Finding transition after ack failed: ${err.message}`);
@@ -437,6 +487,8 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
    * within a system.  Deletes their event_scores, recalculates effective scores,
    * and transitions related open findings to 'acknowledged'.
    *
+   * Supports both PG-backed and ES-backed systems.
+   *
    * Body: { system_id: string, group_key: string }
    */
   app.post(
@@ -455,40 +507,104 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
 
       try {
         const ackTs = new Date().toISOString();
+        const system = await db('monitored_systems').where({ id: system_id }).first();
+        const isEs = system?.event_source === 'elasticsearch';
 
-        // Acknowledge events matching the template group
-        // group_key is either a template_id (UUID) or an event ID for singletons
-        const ackResult = await db('events')
-          .where('system_id', system_id)
-          .whereNull('acknowledged_at')
-          .where(function (this: any) {
-            this.where('template_id', group_key)
-              .orWhere(db.raw('id::text = ?', [group_key]));
-          })
-          .update({ acknowledged_at: ackTs });
+        let ackResult = 0;
+        let idStrings: string[] = [];
+        let ackedMsgs: string[] = [];
 
-        if (ackResult === 0) {
-          return reply.send({ acknowledged: 0, message: 'No matching events to acknowledge.' });
-        }
+        if (isEs) {
+          // ES-backed: acknowledge via es_event_metadata, get messages from ES
+          const metaRows = await db('es_event_metadata')
+            .where({ system_id })
+            .whereNull('acknowledged_at')
+            .where(function (this: any) {
+              this.where('template_id', group_key)
+                .orWhere('es_event_id', group_key);
+            })
+            .select('es_event_id');
 
-        // Delete event_scores for the acknowledged events
-        const ackedIds = await db('events')
-          .where('system_id', system_id)
-          .where('acknowledged_at', ackTs)
-          .where(function (this: any) {
-            this.where('template_id', group_key)
-              .orWhere(db.raw('id::text = ?', [group_key]));
-          })
-          .select(db.raw('id::text as id'));
+          if (metaRows.length === 0) {
+            return reply.send({ acknowledged: 0, message: 'No matching events to acknowledge.' });
+          }
 
-        if (ackedIds.length > 0) {
+          idStrings = metaRows.map((r: any) => r.es_event_id);
+          ackResult = idStrings.length;
+
+          // Update es_event_metadata
           const CHUNK = 5000;
-          const idStrings = ackedIds.map((r: any) => r.id);
+          for (let i = 0; i < idStrings.length; i += CHUNK) {
+            const chunk = idStrings.slice(i, i + CHUNK);
+            await db('es_event_metadata')
+              .where({ system_id })
+              .whereIn('es_event_id', chunk)
+              .update({ acknowledged_at: ackTs });
+          }
+
+          // Delete event_scores
           for (let i = 0; i < idStrings.length; i += CHUNK) {
             await db('event_scores')
               .whereIn('event_id', idStrings.slice(i, i + CHUNK))
               .del();
           }
+
+          // Fetch messages from ES for finding transition (best-effort)
+          try {
+            const eventSource = getEventSource(system!, db);
+            const esEvents = await eventSource.getSystemEvents(system_id, {
+              limit: Math.min(idStrings.length, 100),
+              event_ids: idStrings.slice(0, 100),
+            });
+            ackedMsgs = esEvents.map((e: any) => String(e.message || '')).filter(Boolean);
+          } catch { /* ES unavailable — skip finding transition */ }
+
+        } else {
+          // PG-backed: acknowledge via events table (original path)
+          ackResult = await db('events')
+            .where('system_id', system_id)
+            .whereNull('acknowledged_at')
+            .where(function (this: any) {
+              this.where('template_id', group_key)
+                .orWhere(db.raw('id::text = ?', [group_key]));
+            })
+            .update({ acknowledged_at: ackTs });
+
+          if (ackResult === 0) {
+            return reply.send({ acknowledged: 0, message: 'No matching events to acknowledge.' });
+          }
+
+          // Get IDs for event_scores deletion
+          const ackedIds = await db('events')
+            .where('system_id', system_id)
+            .where('acknowledged_at', ackTs)
+            .where(function (this: any) {
+              this.where('template_id', group_key)
+                .orWhere(db.raw('id::text = ?', [group_key]));
+            })
+            .select(db.raw('id::text as id'));
+
+          idStrings = ackedIds.map((r: any) => r.id);
+          if (idStrings.length > 0) {
+            const CHUNK = 5000;
+            for (let i = 0; i < idStrings.length; i += CHUNK) {
+              await db('event_scores')
+                .whereIn('event_id', idStrings.slice(i, i + CHUNK))
+                .del();
+            }
+          }
+
+          // Get messages for finding transition
+          const ackedMsgRows = await db('events')
+            .where('system_id', system_id)
+            .where('acknowledged_at', ackTs)
+            .where(function (this: any) {
+              this.where('template_id', group_key)
+                .orWhere(db.raw('id::text = ?', [group_key]));
+            })
+            .distinct('message')
+            .limit(100);
+          ackedMsgs = ackedMsgRows.map((r: any) => String(r.message || ''));
         }
 
         // Recalculate effective_scores
@@ -502,16 +618,6 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
         // Transition related open findings to 'acknowledged'
         let transitionedFindings = 0;
         try {
-          const ackedMsgRows = await db('events')
-            .where('system_id', system_id)
-            .where('acknowledged_at', ackTs)
-            .where(function (this: any) {
-              this.where('template_id', group_key)
-                .orWhere(db.raw('id::text = ?', [group_key]));
-            })
-            .distinct('message')
-            .limit(100);
-          const ackedMsgs = ackedMsgRows.map((r: any) => String(r.message || ''));
           transitionedFindings = await transitionFindingsOnAck(db, system_id, ackedMsgs);
         } catch (err: any) {
           app.log.error(`[${localTimestamp()}] Finding transition after group ack failed: ${err.message}`);
@@ -551,6 +657,8 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
    *
    * Un-acknowledge all events matching a template group within a system.
    * Deletes their event_scores so the pipeline can re-score them.
+   *
+   * Supports both PG-backed and ES-backed systems.
    */
   app.post(
     '/api/v1/events/unacknowledge-group',
@@ -567,38 +675,78 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
       }
 
       try {
-        // Get IDs before clearing acknowledged_at
-        const rows = await db('events')
-          .where('system_id', system_id)
-          .whereNotNull('acknowledged_at')
-          .where(function (this: any) {
-            this.where('template_id', group_key)
-              .orWhere(db.raw('id::text = ?', [group_key]));
-          })
-          .select(db.raw('id::text as id'));
-
-        if (rows.length === 0) {
-          return reply.send({ unacknowledged: 0, message: 'No matching acknowledged events.' });
-        }
-
-        const idStrings = rows.map((r: any) => r.id);
-
-        // Clear acknowledged_at and scored_at so the pipeline re-scores them
-        await db('events')
-          .where('system_id', system_id)
-          .whereNotNull('acknowledged_at')
-          .where(function (this: any) {
-            this.where('template_id', group_key)
-              .orWhere(db.raw('id::text = ?', [group_key]));
-          })
-          .update({ acknowledged_at: null, scored_at: null });
-
-        // Delete scores so pipeline re-scores them
+        const system = await db('monitored_systems').where({ id: system_id }).first();
+        const isEs = system?.event_source === 'elasticsearch';
         const CHUNK = 5000;
-        for (let i = 0; i < idStrings.length; i += CHUNK) {
-          await db('event_scores')
-            .whereIn('event_id', idStrings.slice(i, i + CHUNK))
-            .del();
+        let unackCount = 0;
+        let idStrings: string[] = [];
+
+        if (isEs) {
+          // ES-backed: find acknowledged events in es_event_metadata
+          const metaRows = await db('es_event_metadata')
+            .where({ system_id })
+            .whereNotNull('acknowledged_at')
+            .where(function (this: any) {
+              this.where('template_id', group_key)
+                .orWhere('es_event_id', group_key);
+            })
+            .select('es_event_id');
+
+          if (metaRows.length === 0) {
+            return reply.send({ unacknowledged: 0, message: 'No matching acknowledged events.' });
+          }
+
+          idStrings = metaRows.map((r: any) => r.es_event_id);
+          unackCount = idStrings.length;
+
+          // Clear acknowledged_at and scored_at so the pipeline re-scores them
+          for (let i = 0; i < idStrings.length; i += CHUNK) {
+            await db('es_event_metadata')
+              .where({ system_id })
+              .whereIn('es_event_id', idStrings.slice(i, i + CHUNK))
+              .update({ acknowledged_at: null, scored_at: null });
+          }
+
+          // Delete event_scores so pipeline re-scores them
+          for (let i = 0; i < idStrings.length; i += CHUNK) {
+            await db('event_scores')
+              .whereIn('event_id', idStrings.slice(i, i + CHUNK))
+              .del();
+          }
+        } else {
+          // PG-backed: find events in events table (original path)
+          const rows = await db('events')
+            .where('system_id', system_id)
+            .whereNotNull('acknowledged_at')
+            .where(function (this: any) {
+              this.where('template_id', group_key)
+                .orWhere(db.raw('id::text = ?', [group_key]));
+            })
+            .select(db.raw('id::text as id'));
+
+          if (rows.length === 0) {
+            return reply.send({ unacknowledged: 0, message: 'No matching acknowledged events.' });
+          }
+
+          idStrings = rows.map((r: any) => r.id);
+          unackCount = idStrings.length;
+
+          // Clear acknowledged_at and scored_at so the pipeline re-scores them
+          await db('events')
+            .where('system_id', system_id)
+            .whereNotNull('acknowledged_at')
+            .where(function (this: any) {
+              this.where('template_id', group_key)
+                .orWhere(db.raw('id::text = ?', [group_key]));
+            })
+            .update({ acknowledged_at: null, scored_at: null });
+
+          // Delete scores so pipeline re-scores them
+          for (let i = 0; i < idStrings.length; i += CHUNK) {
+            await db('event_scores')
+              .whereIn('event_id', idStrings.slice(i, i + CHUNK))
+              .del();
+          }
         }
 
         // Recalculate effective_scores
@@ -610,7 +758,7 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
         }
 
         app.log.info(
-          `[${localTimestamp()}] Group unack: ${rows.length} events (group=${group_key}, system=${system_id}), ` +
+          `[${localTimestamp()}] Group unack: ${unackCount} events (group=${group_key}, system=${system_id}), ` +
           `${updatedWindows} windows recalculated`,
         );
 
@@ -618,16 +766,16 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
           actor_name: getActorName(request),
           action: 'event_unacknowledge_group',
           resource_type: 'events',
-          details: { system_id, group_key, count: rows.length, updatedWindows },
+          details: { system_id, group_key, count: unackCount, updatedWindows },
           ip: request.ip,
           user_id: request.currentUser?.id,
           session_id: request.currentSession?.id,
         });
 
         return reply.send({
-          unacknowledged: rows.length,
+          unacknowledged: unackCount,
           updated_windows: updatedWindows,
-          message: `${rows.length} event${rows.length !== 1 ? 's' : ''} in group un-acknowledged.`,
+          message: `${unackCount} event${unackCount !== 1 ? 's' : ''} in group un-acknowledged.`,
         });
       } catch (err: any) {
         app.log.error(`[${localTimestamp()}] Group event un-acknowledge error: ${err.message}`);
@@ -765,10 +913,65 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
       }
 
       try {
-        const events = await db('events')
-          .whereIn('id', validIds)
-          .select('id', 'timestamp', 'host', 'source_ip', 'severity', 'program', 'message', 'system_id', 'acknowledged_at')
-          .orderBy('timestamp', 'desc');
+        // Separate UUIDs (PG events) from non-UUIDs (ES event IDs)
+        const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        const pgIds = validIds.filter((id: string) => UUID_REGEX.test(id));
+        const esIds = validIds.filter((id: string) => !UUID_REGEX.test(id));
+
+        // PG events
+        const pgEvents = pgIds.length > 0
+          ? await db('events')
+              .whereIn('id', pgIds)
+              .select('id', 'timestamp', 'host', 'source_ip', 'severity', 'program', 'message', 'system_id', 'acknowledged_at')
+              .orderBy('timestamp', 'desc')
+          : [];
+
+        // ES events: look up system via es_event_metadata, then fetch from ES
+        let esEvents: any[] = [];
+        if (esIds.length > 0) {
+          try {
+            const metaRows = await db('es_event_metadata')
+              .whereIn('es_event_id', esIds)
+              .select('es_event_id', 'system_id', 'acknowledged_at');
+            if (metaRows.length > 0) {
+              // Group by system_id for batch fetching
+              const bySystem = new Map<string, string[]>();
+              const metaMap = new Map<string, any>();
+              for (const row of metaRows) {
+                let list = bySystem.get(row.system_id);
+                if (!list) { list = []; bySystem.set(row.system_id, list); }
+                list.push(row.es_event_id);
+                metaMap.set(row.es_event_id, row);
+              }
+              for (const [sysId, eids] of bySystem) {
+                const sys = await db('monitored_systems').where({ id: sysId }).first();
+                if (!sys) continue;
+                const src = getEventSource(sys, db);
+                const fetched = await src.getSystemEvents(sysId, { limit: eids.length, event_ids: eids });
+                for (const evt of fetched) {
+                  const meta = metaMap.get(evt.id);
+                  esEvents.push({
+                    id: evt.id,
+                    timestamp: evt.timestamp,
+                    host: evt.host ?? null,
+                    source_ip: evt.source_ip ?? null,
+                    severity: evt.severity ?? null,
+                    program: evt.program ?? null,
+                    message: evt.message ?? null,
+                    system_id: sysId,
+                    acknowledged_at: meta?.acknowledged_at ?? null,
+                  });
+                }
+              }
+            }
+          } catch (esErr: any) {
+            app.log.warn(`[${localTimestamp()}] ES event fetch for by-ids failed (non-critical): ${esErr.message}`);
+          }
+        }
+
+        const events = [...pgEvents, ...esEvents].sort(
+          (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+        );
 
         return reply.send({ events });
       } catch (err: any) {

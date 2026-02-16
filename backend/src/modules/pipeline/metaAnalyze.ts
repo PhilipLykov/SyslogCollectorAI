@@ -540,6 +540,10 @@ export async function metaAnalyzeWindow(
   if (effectiveExcludeAcked && context.previousSummaries.length > 0) {
     // Use DISTINCT ON (normalized_hash) instead of DISTINCT(message) for efficiency.
     // Also limit to recent events for partition pruning.
+    //
+    // For ES-backed systems, PG events table is empty. Check es_event_metadata
+    // to find acknowledged ES events and fetch their messages from the events
+    // returned by getEventsInTimeRange (which already enriches with metadata).
     const ackedRecentCutoff = new Date(Date.now() - 7 * 86_400_000).toISOString();
     const ackedMessages = await db('events')
       .where('system_id', system.id)
@@ -548,6 +552,37 @@ export async function metaAnalyzeWindow(
       .distinctOn('normalized_hash')
       .select('message', 'normalized_hash')
       .limit(500);
+
+    // For ES-backed systems, also check es_event_metadata for acked event messages.
+    // We use the events already fetched for this window to extract messages of
+    // acknowledged events (they were excluded from `events` array by excludeAcknowledged
+    // but we can cross-reference metadata).
+    if (system.event_source === 'elasticsearch') {
+      try {
+        const esAckedIds = await db('es_event_metadata')
+          .where({ system_id: system.id })
+          .whereNotNull('acknowledged_at')
+          .select('es_event_id')
+          .limit(500);
+        if (esAckedIds.length > 0) {
+          const esSource = getEventSource(system, db);
+          const esAckedEvents = await esSource.getSystemEvents(system.id, {
+            limit: Math.min(esAckedIds.length, 200),
+            event_ids: esAckedIds.map((r: any) => r.es_event_id),
+          });
+          for (const evt of esAckedEvents) {
+            if (evt.message) {
+              ackedMessages.push({ message: evt.message, normalized_hash: null });
+            }
+          }
+        }
+      } catch (err) {
+        console.warn(
+          `[${localTimestamp()}] Meta-analyze: failed to fetch ES acked messages ` +
+          `(non-critical, window=${windowId}): ${err instanceof Error ? err.message : err}`,
+        );
+      }
+    }
 
     if (ackedMessages.length > 0) {
       const ackedKeywords = new Set<string>();
@@ -1133,6 +1168,9 @@ export async function metaAnalyzeWindow(
     // ── Compute effective scores per criterion (batched) ──────────
     // Single query to get MAX(score) per criterion for un-acknowledged events,
     // then batch-insert all 6 effective_scores rows in one statement.
+    //
+    // The NOT EXISTS check supports both PG events (acknowledged_at on events table)
+    // and ES events (acknowledged_at on es_event_metadata table).
     const maxScoreRows = await trx.raw(`
       SELECT es.criterion_id, COALESCE(MAX(es.score), 0) AS max_score
       FROM event_scores es
@@ -1143,8 +1181,14 @@ export async function metaAnalyzeWindow(
           WHERE e.id::text = es.event_id
             AND e.acknowledged_at IS NOT NULL
         )
+        AND NOT EXISTS (
+          SELECT 1 FROM es_event_metadata em
+          WHERE em.es_event_id = es.event_id
+            AND em.system_id = ?
+            AND em.acknowledged_at IS NOT NULL
+        )
       GROUP BY es.criterion_id
-    `, [eventIds.map(String)]);
+    `, [eventIds.map(String), system.id]);
     const maxScoreMap = new Map<number, number>();
     for (const row of maxScoreRows.rows ?? []) {
       maxScoreMap.set(Number(row.criterion_id), Number(row.max_score));
