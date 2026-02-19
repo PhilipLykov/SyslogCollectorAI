@@ -489,8 +489,8 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
             return reply.send({ acknowledged: 0, message: 'No matching events to acknowledge.' });
           }
 
-          idStrings = rows.map((r: any) => r.id);
-          ackedMsgs = [...new Set(rows.map((r: any) => String(r.message || '')).filter(Boolean))].slice(0, 100);
+          idStrings = rows.map((r: any) => String(r.id));
+          ackedMsgs = [...new Set<string>(rows.map((r: any) => String(r.message || '')).filter(Boolean))].slice(0, 100);
 
           // Delete event_scores for acked events
           if (idStrings.length > 0) {
