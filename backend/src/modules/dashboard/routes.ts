@@ -454,8 +454,8 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
         resource_type: 'system',
         resource_id: systemId,
         ip: request.ip,
-        user_id: (request as any).currentUser?.id,
-        session_id: (request as any).currentSession?.id,
+        user_id: request.currentUser?.id,
+        session_id: request.currentSession?.id,
       });
 
       return reply.send({ ok: true, updated_rows: updated });

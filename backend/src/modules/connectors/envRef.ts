@@ -1,4 +1,5 @@
 import { localTimestamp } from '../../config/index.js';
+import { logger } from '../../config/logger.js';
 
 /**
  * Resolve an environment variable reference.
@@ -15,7 +16,7 @@ export function resolveEnvRef(ref: string | undefined | null): string {
     const varName = ref.slice(4);
     const value = process.env[varName];
     if (value === undefined) {
-      console.warn(`[${localTimestamp()}] resolveEnvRef: environment variable "${varName}" is not set (ref="${ref}")`);
+      logger.warn(`[${localTimestamp()}] resolveEnvRef: environment variable "${varName}" is not set (ref="${ref}")`);
       return '';
     }
     return value;

@@ -11,6 +11,7 @@
 
 import { getDb } from '../db/index.js';
 import { localTimestamp } from '../config/index.js';
+import { logger } from '../config/logger.js';
 
 // ── Permission constants ─────────────────────────────────────
 
@@ -187,7 +188,7 @@ export async function getPermissionsForRole(role: string): Promise<ReadonlySet<P
     return perms;
   } catch (err) {
     // Table may not exist yet (pre-migration) — use fallback
-    console.warn(`[${localTimestamp()}] WARN: Could not read role_permissions from DB, using fallback. ${err}`);
+    logger.warn(`[${localTimestamp()}] WARN: Could not read role_permissions from DB, using fallback. ${err}`);
     return FALLBACK_ROLE_PERMISSIONS[role] ?? new Set();
   }
 }

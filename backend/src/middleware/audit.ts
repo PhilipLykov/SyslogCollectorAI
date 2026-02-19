@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { Knex } from 'knex';
 import { localTimestamp } from '../config/index.js';
+import { logger } from '../config/logger.js';
 
 const SENSITIVE_KEYS = new Set([
   'password', 'passwd', 'secret', 'token', 'api_key', 'apikey',
@@ -47,7 +48,7 @@ export async function writeAuditLog(
     });
   } catch (err) {
     // Audit logging should never break the main flow
-    console.error(`[${localTimestamp()}] Audit log write failed:`, err);
+    logger.error(`[${localTimestamp()}] Audit log write failed:`, err);
   }
 }
 

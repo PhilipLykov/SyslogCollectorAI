@@ -11,6 +11,7 @@
 
 import type { Client } from '@elastic/elasticsearch';
 import type { Knex } from 'knex';
+import { logger } from '../config/logger.js';
 import { getDb } from '../db/index.js';
 import { getEsClient } from './esClient.js';
 import { localTimestamp } from '../config/index.js';
@@ -665,7 +666,7 @@ export class EsEventSource implements EventSource {
   async deleteOldEvents(_systemId: string, _cutoffIso: string): Promise<BulkDeleteResult> {
     // Cannot delete events from a read-only ES cluster.
     // We can only clean up local PG metadata and orphaned scores.
-    console.log(`[${localTimestamp()}] ES: deleteOldEvents is a no-op for Elasticsearch-backed systems (read-only). Cleaning PG metadata + scores only.`);
+    logger.debug(`[${localTimestamp()}] ES: deleteOldEvents is a no-op for Elasticsearch-backed systems (read-only). Cleaning PG metadata + scores only.`);
 
     // Find old metadata IDs to also clean up their event_scores
     const oldMetaIds = await this.db('es_event_metadata')
@@ -686,14 +687,14 @@ export class EsEventSource implements EventSource {
       .where('created_at', '<', _cutoffIso)
       .del();
 
-    console.log(`[${localTimestamp()}] ES: cleaned ${deletedMeta} metadata rows and ${deletedScores} event_scores rows`);
+    logger.debug(`[${localTimestamp()}] ES: cleaned ${deletedMeta} metadata rows and ${deletedScores} event_scores rows`);
 
     return { deleted_events: 0, deleted_scores: deletedScores };
   }
 
   async bulkDeleteEvents(_filters: BulkDeleteFilters): Promise<BulkDeleteResult> {
     // Cannot delete events from read-only ES.
-    console.log(`[${localTimestamp()}] ES: bulkDeleteEvents is a no-op for Elasticsearch-backed systems (read-only).`);
+    logger.debug(`[${localTimestamp()}] ES: bulkDeleteEvents is a no-op for Elasticsearch-backed systems (read-only).`);
     return { deleted_events: 0, deleted_scores: 0 };
   }
 

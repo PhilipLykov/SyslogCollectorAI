@@ -25,6 +25,7 @@
 
 import type { Knex } from 'knex';
 import { localTimestamp } from '../../config/index.js';
+import { logger } from '../../config/logger.js';
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -166,7 +167,7 @@ export async function loadPrivacyFilterConfig(db: Knex): Promise<PrivacyFilterCo
     _cacheTime = Date.now();
     return _cachedConfig;
   } catch (err) {
-    console.error(`[${localTimestamp()}] Failed to load privacy filter config:`, err);
+    logger.error(`[${localTimestamp()}] Failed to load privacy filter config:`, err);
     return { ...PRIVACY_FILTER_DEFAULTS };
   }
 }

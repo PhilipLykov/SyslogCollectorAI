@@ -1,5 +1,6 @@
 import type { ConnectorAdapter } from './interface.js';
 import type { NormalizedEvent } from '../../types/index.js';
+import { logger } from '../../config/logger.js';
 import { resolveEnvRef } from './envRef.js';
 import { validateUrl } from './urlValidation.js';
 
@@ -77,7 +78,7 @@ export class LokiConnector implements ConnectorAdapter {
           if (tsBI > BigInt(maxTs)) maxTs = ts;
         } catch {
           // Skip entries with non-numeric timestamps to avoid blocking the connector
-          console.warn(`Loki: skipping entry with invalid timestamp: ${String(ts).slice(0, 50)}`);
+          logger.warn(`Loki: skipping entry with invalid timestamp: ${String(ts).slice(0, 50)}`);
         }
       }
     }

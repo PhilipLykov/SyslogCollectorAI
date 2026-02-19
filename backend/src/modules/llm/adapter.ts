@@ -1,3 +1,4 @@
+import { logger } from '../../config/logger.js';
 import { localTimestamp } from '../../config/index.js';
 import { CRITERIA_SLUGS, type CriterionSlug, type MetaScores } from '../../types/index.js';
 
@@ -414,7 +415,7 @@ export class OpenAiAdapter implements LlmAdapter {
     this.baseUrl = cfg?.baseUrl ?? process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1';
 
     if (!this.apiKey) {
-      console.warn(`[${localTimestamp()}] WARNING: OPENAI_API_KEY not set. LLM scoring will fail.`);
+      logger.warn(`[${localTimestamp()}] WARNING: OPENAI_API_KEY not set. LLM scoring will fail.`);
     }
   }
 
@@ -485,7 +486,7 @@ export class OpenAiAdapter implements LlmAdapter {
         scores = scores.slice(0, events.length);
       }
     } catch (err) {
-      console.error(`[${localTimestamp()}] LLM scoring failed:`, err);
+      logger.error(`[${localTimestamp()}] LLM scoring failed:`, err);
       // Return zero scores rather than crash the pipeline
       scores = events.map(() => emptyScoreResult());
       usage = { model: effectiveScoringModel, token_input: 0, token_output: 0, request_count: 1 };
@@ -684,8 +685,8 @@ export class OpenAiAdapter implements LlmAdapter {
         usage: response.usage,
       };
     } catch (err) {
-      console.error(`[${localTimestamp()}] Failed to parse LLM meta response:`, err);
-      console.error(`[${localTimestamp()}] Raw response: ${response.content.slice(0, 500)}`);
+      logger.error(`[${localTimestamp()}] Failed to parse LLM meta response:`, err);
+      logger.error(`[${localTimestamp()}] Raw response: ${response.content.slice(0, 500)}`);
       throw new Error('Failed to parse meta-analysis LLM response');
     }
   }
@@ -723,7 +724,7 @@ export class OpenAiAdapter implements LlmAdapter {
     const data = await res.json() as any;
     const content = data.choices?.[0]?.message?.content;
     if (!content) {
-      console.warn(`[${localTimestamp()}] LLM returned empty content (model=${effectiveModel})`);
+      logger.warn(`[${localTimestamp()}] LLM returned empty content (model=${effectiveModel})`);
     }
     const usage: LlmUsageInfo = {
       model: effectiveModel,

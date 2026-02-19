@@ -42,7 +42,7 @@ function parseCredentials(raw: string | null | undefined): Record<string, string
   try {
     return JSON.parse(raw);
   } catch {
-    console.warn(`[${localTimestamp()}] ES: failed to parse credentials JSON`);
+    logger.warn(`[${localTimestamp()}] ES: failed to parse credentials JSON`);
     return {};
   }
 }
@@ -133,7 +133,7 @@ export async function getEsClient(connectionId: string, db?: Knex): Promise<Clie
     safeUrl = u.toString();
   } catch { safeUrl = '<invalid-url>'; }
 
-  console.log(`[${localTimestamp()}] ES: created client for connection "${row.name}" (${safeUrl})`);
+  logger.info(`[${localTimestamp()}] ES: created client for connection "${row.name}" (${safeUrl})`);
   return client;
 }
 
@@ -199,7 +199,7 @@ export async function destroyEsClient(connectionId: string): Promise<void> {
     try {
       await entry.client.close();
     } catch (err) {
-      console.warn(`[${localTimestamp()}] ES: error closing client "${connectionId}": ${err}`);
+      logger.warn(`[${localTimestamp()}] ES: error closing client "${connectionId}": ${err}`);
     }
     clientPool.delete(connectionId);
   }

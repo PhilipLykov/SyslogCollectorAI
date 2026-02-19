@@ -23,7 +23,7 @@ import { localTimestamp } from './config/index.js';
 
 export async function buildApp(): Promise<FastifyInstance> {
   const isProd = process.env.NODE_ENV === 'production';
-  const logLevel = process.env.LOG_LEVEL || (isProd ? 'warn' : 'info');
+  const logLevel = (process.env.LOG_LEVEL || (isProd ? 'warn' : 'info')).toLowerCase();
   const app = Fastify({
     disableRequestLogging: true,
     logger: isProd
