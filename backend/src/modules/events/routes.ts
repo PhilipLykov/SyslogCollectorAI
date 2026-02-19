@@ -473,31 +473,26 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
           } catch { /* ES unavailable — skip finding transition */ }
 
         } else {
-          // PG-backed: acknowledge via events table (original path)
-          ackResult = await db('events')
-            .where('system_id', system_id)
-            .whereNull('acknowledged_at')
-            .where(function (this: any) {
-              this.where('template_id', group_key)
-                .orWhere(db.raw('id::text = ?', [group_key]));
-            })
-            .update({ acknowledged_at: ackTs });
+          // PG-backed: single UPDATE ... RETURNING to get IDs and messages
+          const ackedRows = await db.raw(`
+            UPDATE events SET acknowledged_at = ?
+            WHERE system_id = ?
+              AND acknowledged_at IS NULL
+              AND (template_id = ? OR id::text = ?)
+            RETURNING id::text AS id, message
+          `, [ackTs, system_id, group_key, group_key]);
+
+          const rows = ackedRows.rows ?? [];
+          ackResult = rows.length;
 
           if (ackResult === 0) {
             return reply.send({ acknowledged: 0, message: 'No matching events to acknowledge.' });
           }
 
-          // Get IDs for event_scores deletion
-          const ackedIds = await db('events')
-            .where('system_id', system_id)
-            .where('acknowledged_at', ackTs)
-            .where(function (this: any) {
-              this.where('template_id', group_key)
-                .orWhere(db.raw('id::text = ?', [group_key]));
-            })
-            .select(db.raw('id::text as id'));
+          idStrings = rows.map((r: any) => r.id);
+          ackedMsgs = [...new Set(rows.map((r: any) => String(r.message || '')).filter(Boolean))].slice(0, 100);
 
-          idStrings = ackedIds.map((r: any) => r.id);
+          // Delete event_scores for acked events
           if (idStrings.length > 0) {
             const CHUNK = 5000;
             for (let i = 0; i < idStrings.length; i += CHUNK) {
@@ -506,18 +501,6 @@ export async function registerEventRoutes(app: FastifyInstance): Promise<void> {
                 .del();
             }
           }
-
-          // Get messages for finding transition
-          const ackedMsgRows = await db('events')
-            .where('system_id', system_id)
-            .where('acknowledged_at', ackTs)
-            .where(function (this: any) {
-              this.where('template_id', group_key)
-                .orWhere(db.raw('id::text = ?', [group_key]));
-            })
-            .distinct('message')
-            .limit(100);
-          ackedMsgs = ackedMsgRows.map((r: any) => String(r.message || ''));
         }
 
         // Recalculate effective_scores

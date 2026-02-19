@@ -30,7 +30,14 @@ local name_cache = {}
 
 -- Patterns in the container name that identify the log-collector itself.
 -- Events from these containers are dropped to avoid a feedback loop.
-local SELF_PATTERNS = { "log%-collector", "fluent%-bit", "fluent_bit", "fluentbit", "logsentinel%-backend", "logsentinel%-dashboard", "docker%-backend", "docker%-dashboard" }
+local SELF_PATTERNS = {
+    "%-backend",
+    "%-dashboard",
+    "%-log%-collector",
+    "fluent%-bit",
+    "fluent_bit",
+    "fluentbit",
+}
 
 -- ── Severity alias → canonical syslog name ───────────────────────
 -- Maps common severity/level strings (lowercased) to the canonical

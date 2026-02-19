@@ -6,21 +6,19 @@ import { requireAuth } from '../../middleware/auth.js';
 import { PERMISSIONS } from '../../middleware/permissions.js';
 import { writeAuditLog, getActorName } from '../../middleware/audit.js';
 import { localTimestamp } from '../../config/index.js';
-import { CRITERIA } from '../../types/index.js';
 import {
   generateNormalPattern,
   ensureRegexPattern,
   escapeRegex,
 } from '../pipeline/normalBehavior.js';
-
-/** Default meta-weight for effective score blending (must match metaAnalyze). */
-const DEFAULT_W_META = 0.7;
+import { recalcEffectiveScores } from '../events/recalcScores.js';
+import { logger } from '../../config/logger.js';
 
 /**
  * Retroactively apply a new normal-behavior template:
  *  1. Zero out event_scores for events matching the pattern within the
  *     configured score display window (default 7 days, from app_config)
- *  2. Recalculate effective_scores for affected windows
+ *  2. Recalculate effective_scores via the optimized single-CTE function
  *
  * This ensures the dashboard reflects the change immediately, rather than
  * waiting for the next meta-analysis cycle.
@@ -32,10 +30,7 @@ async function retroactivelyApplyTemplate(
   hostPattern?: string | null,
   programPattern?: string | null,
 ): Promise<{ zeroedEvents: number; updatedWindows: number }> {
-  // Use the configured score display window (default 7 days) instead of
-  // a hardcoded 24h lookback. This ensures that events within the full
-  // dashboard display window get their scores zeroed immediately.
-  let windowDays = 7; // default
+  let windowDays = 7;
   try {
     const cfgRow = await db('app_config').where({ key: 'dashboard_config' }).first('value');
     if (cfgRow) {
@@ -47,8 +42,7 @@ async function retroactivelyApplyTemplate(
 
   const sinceWindow = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000).toISOString();
 
-  // 1. Zero out event_scores for matching events (PostgreSQL ~* = case-insensitive regex).
-  // Cast events.id (UUID) to text — event_scores.event_id is VARCHAR(255).
+  // 1. Zero out event_scores for matching events (fast, single query)
   const subquery = db('events')
     .select(db.raw('id::text'))
     .where('timestamp', '>=', sinceWindow)
@@ -73,83 +67,10 @@ async function retroactivelyApplyTemplate(
     return { zeroedEvents: 0, updatedWindows: 0 };
   }
 
-  // 2. Recalculate effective_scores for recent windows
-  const windowQuery = db('windows')
-    .where('to_ts', '>=', sinceWindow)
-    .select('id', 'system_id', 'from_ts', 'to_ts');
+  // 2. Recalculate effective_scores in a single CTE query
+  const updatedWindows = await recalcEffectiveScores(db, systemId);
 
-  if (systemId) {
-    windowQuery.where('system_id', systemId);
-  }
-
-  const windows = await windowQuery;
-  let updatedWindows = 0;
-
-  for (const w of windows) {
-    let windowUpdated = false;
-
-    for (const criterion of CRITERIA) {
-      const existing = await db('effective_scores')
-        .where({ window_id: w.id, system_id: w.system_id, criterion_id: criterion.id })
-        .first();
-
-      if (!existing) continue;
-
-      // Recalculate max_event_score from event_scores within this window.
-      // Use a subquery (not JOIN) for the partitioned events table — more
-      // reliable and allows PostgreSQL to prune partitions efficiently.
-      // Cast events.id (UUID) to text — event_scores.event_id is VARCHAR(255).
-      // Also exclude events matching ANY enabled normal behavior template
-      // (not just the one being created) for full consistency with the
-      // drill-down and recalcEffectiveScores filters.
-      const maxRow = await db.raw(`
-        SELECT COALESCE(MAX(es.score), 0) AS max_score
-        FROM event_scores es
-        JOIN events e ON e.id::text = es.event_id
-        WHERE e.system_id = ?
-          AND e.timestamp >= ?
-          AND e.timestamp <= ?
-          AND es.criterion_id = ?
-          AND es.score_type = 'event'
-          AND e.acknowledged_at IS NULL
-          AND NOT EXISTS (
-            SELECT 1 FROM normal_behavior_templates nbt
-            WHERE nbt.enabled = true
-              AND (nbt.system_id IS NULL OR nbt.system_id = e.system_id)
-              AND e.message ~* nbt.pattern
-              AND (nbt.host_pattern IS NULL OR e.host ~* nbt.host_pattern)
-              AND (nbt.program_pattern IS NULL OR e.program ~* nbt.program_pattern)
-          )
-      `, [w.system_id, w.from_ts, w.to_ts, criterion.id]);
-
-      const newMaxEvent = Number(maxRow?.rows?.[0]?.max_score ?? 0);
-      let metaScore = Number(existing.meta_score) || 0;
-
-      // If ALL events in this window now have score 0 for this criterion,
-      // the meta-analysis conclusion (based on those same events) is no longer
-      // valid. Zero the meta_score so the effective score drops to 0 as well.
-      if (newMaxEvent === 0) {
-        metaScore = 0;
-      }
-
-      const newEffective = DEFAULT_W_META * metaScore + (1 - DEFAULT_W_META) * newMaxEvent;
-
-      await db('effective_scores')
-        .where({ window_id: w.id, system_id: w.system_id, criterion_id: criterion.id })
-        .update({
-          meta_score: metaScore,
-          max_event_score: newMaxEvent,
-          effective_value: newEffective,
-          updated_at: new Date().toISOString(),
-        });
-
-      windowUpdated = true;
-    }
-
-    if (windowUpdated) updatedWindows++;
-  }
-
-  console.log(
+  logger.debug(
     `[${localTimestamp()}] Retroactive normal-behavior update: zeroed ${zeroedEvents} event_scores, recalculated ${updatedWindows} windows (lookback=${windowDays}d)`,
   );
 
@@ -341,7 +262,7 @@ export async function registerNormalBehaviorRoutes(app: FastifyInstance): Promis
       });
 
       const created = await db('normal_behavior_templates').where({ id }).first();
-      console.log(
+      logger.debug(
         `[${localTimestamp()}] Normal behavior template created by ${username}: regex (system=${systemId ?? 'global'}, host=${hostPattern ?? 'any'}, program=${programPattern ?? 'any'})`,
       );
 
@@ -350,7 +271,7 @@ export async function registerNormalBehaviorRoutes(app: FastifyInstance): Promis
       try {
         retroResult = await retroactivelyApplyTemplate(db, patternRegex, systemId, hostPattern, programPattern);
       } catch (err) {
-        console.error(
+        logger.error(
           `[${localTimestamp()}] Retroactive score update failed (template ${id} still created): ${err instanceof Error ? err.message : String(err)}`,
         );
       }
@@ -505,7 +426,7 @@ export async function registerNormalBehaviorRoutes(app: FastifyInstance): Promis
         session_id: request.currentSession?.id,
       });
 
-      console.log(
+      logger.debug(
         `[${localTimestamp()}] Normal behavior template deleted: "${existing.pattern}" (id=${id})`,
       );
 

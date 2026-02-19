@@ -93,7 +93,7 @@ export async function registerIngestRoutes(app: FastifyInstance): Promise<void> 
         const before = entries.length;
         entries = reassembleMultilineEntries(entries);
         if (entries.length < before) {
-          app.log.info(
+          app.log.debug(
             `[${localTimestamp()}] Multiline reassembly: ${before} → ${entries.length} entries (merged ${before - entries.length})`,
           );
         }
@@ -265,7 +265,7 @@ export async function registerIngestRoutes(app: FastifyInstance): Promise<void> 
         }
       }
 
-      app.log.info(
+      app.log.debug(
         { accepted, rejected, futureClamped, ip: request.ip },
         `[${localTimestamp()}] Ingest complete`,
       );

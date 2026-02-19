@@ -1,5 +1,6 @@
 import type { Knex } from 'knex';
 import { localTimestamp } from '../../config/index.js';
+import { logger } from '../../config/logger.js';
 
 /**
  * Normal Behavior Templates — regex pattern generation, matching, and loading.
@@ -280,7 +281,7 @@ function safeCompileRegex(source: string, label: string, templateId: string): Re
   try {
     return new RegExp(source, 'i');
   } catch {
-    console.error(
+    logger.error(
       `[${localTimestamp()}] Invalid ${label} regex in normal_behavior_template ${templateId}: ${source}`,
     );
     return null;

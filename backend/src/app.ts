@@ -23,19 +23,18 @@ import { localTimestamp } from './config/index.js';
 
 export async function buildApp(): Promise<FastifyInstance> {
   const isProd = process.env.NODE_ENV === 'production';
+  const logLevel = process.env.LOG_LEVEL || (isProd ? 'warn' : 'info');
   const app = Fastify({
+    disableRequestLogging: true,
     logger: isProd
-      ? true // structured JSON logging in production (efficient, ELK/Datadog friendly)
+      ? { level: logLevel }
       : {
+          level: logLevel,
           transport: {
             target: 'pino-pretty',
             options: { translateTime: 'SYS:standard', ignore: 'pid,hostname' },
           },
         },
-    // A03: reject overly large payloads to prevent abuse.
-    // 50 MB accommodates Fluent Bit Docker-log batches that can be very
-    // large when containers produce high log volume. The Fluent Bit
-    // Mem_Buf_Limit on the tail input provides the primary size control.
     bodyLimit: 52_428_800,
   });
 

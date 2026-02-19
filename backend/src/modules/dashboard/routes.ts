@@ -11,6 +11,7 @@ import { OpenAiAdapter } from '../llm/adapter.js';
 import { resolveAiConfig } from '../llm/aiConfig.js';
 import { metaAnalyzeWindow } from '../pipeline/metaAnalyze.js';
 import { recalcEffectiveScores } from '../events/recalcScores.js';
+import { runPerEventScoringJob } from '../pipeline/scoringJob.js';
 
 /**
  * Dashboard-oriented API routes: system overview, drill-down, SSE stream.
@@ -503,11 +504,36 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
         });
       }
 
+      // Load pipeline config for SQL normalization setting
+      let normalizeSql = false;
+      try {
+        const pipeRow = await db('app_config').where({ key: 'pipeline_config' }).first('value');
+        if (pipeRow?.value) {
+          const pipeParsed = typeof pipeRow.value === 'string' ? JSON.parse(pipeRow.value) : pipeRow.value;
+          normalizeSql = !!pipeParsed?.normalize_sql_statements;
+        }
+      } catch { /* use default */ }
+
+      // Score any unscored events for this system first so that
+      // the meta-analysis operates on fully scored data.
+      try {
+        const scoringResult = await runPerEventScoringJob(db, llm, {
+          systemId,
+          limit: reevalMaxEvents,
+          normalizeSql,
+        });
+        if (scoringResult.scored > 0) {
+          app.log.info(`[${localTimestamp()}] Re-evaluate: scored ${scoringResult.scored} events for system ${systemId}`);
+        }
+      } catch (err: any) {
+        app.log.warn(`[${localTimestamp()}] Pre-reeval per-event scoring failed: ${err.message}`);
+      }
+
       // Recalculate effective scores BEFORE LLM call
       try {
         await recalcEffectiveScores(db, systemId);
       } catch (err: any) {
-        console.log(`[${localTimestamp()}] Pre-reeval recalc failed: ${err.message}`);
+        app.log.warn(`[${localTimestamp()}] Pre-reeval recalc failed: ${err.message}`);
       }
 
       const windowId = uuidv4();
@@ -519,7 +545,7 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
         trigger: 'manual',
       });
 
-      console.log(
+      app.log.debug(
         `[${localTimestamp()}] Re-evaluate triggered for system "${system.name}" (${systemId}), window ${windowId} [${from_ts} — ${to_ts}], ${eventCount} events`,
       );
 
@@ -530,7 +556,7 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
           maxEvents: reevalMaxEvents,
         });
       } catch (err) {
-        console.error(
+        app.log.error(
           `[${localTimestamp()}] Re-evaluate meta-analysis failed for window ${windowId}: ${err instanceof Error ? err.message : String(err)}`,
         );
         return reply.code(500).send({
@@ -542,7 +568,7 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
       try {
         await recalcEffectiveScores(db, systemId);
       } catch (err: any) {
-        console.log(`[${localTimestamp()}] Post-reeval recalc failed: ${err.message}`);
+        app.log.warn(`[${localTimestamp()}] Post-reeval recalc failed: ${err.message}`);
       }
 
       // Fetch the new effective scores to return to the caller

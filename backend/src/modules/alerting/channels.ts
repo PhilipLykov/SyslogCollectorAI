@@ -1,3 +1,4 @@
+import { logger } from '../../config/logger.js';
 import { localTimestamp } from '../../config/index.js';
 import { resolveEnvRef } from '../connectors/envRef.js';
 import { validateUrl } from '../connectors/urlValidation.js';
@@ -288,9 +289,9 @@ export async function sendNotification(
 
   try {
     await adapter(config, payload);
-    console.log(`[${localTimestamp()}] Notification sent via ${channelType}: "${payload.title}" (${payload.variant})`);
+    logger.debug(`[${localTimestamp()}] Notification sent via ${channelType}: "${payload.title}" (${payload.variant})`);
   } catch (err) {
-    console.error(`[${localTimestamp()}] Notification failed via ${channelType}:`, err);
+    logger.error(`[${localTimestamp()}] Notification failed via ${channelType}:`, err);
     throw err;
   }
 }

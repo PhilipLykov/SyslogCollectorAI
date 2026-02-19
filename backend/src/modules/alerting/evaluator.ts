@@ -1,5 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { Knex } from 'knex';
+import { logger } from '../../config/logger.js';
 import { localTimestamp } from '../../config/index.js';
 import { sendNotification, type AlertPayload } from './channels.js';
 import { CRITERIA } from '../../types/index.js';
@@ -12,7 +13,7 @@ const DASHBOARD_URL = RAW_DASHBOARD_URL && /^https?:\/\//i.test(RAW_DASHBOARD_UR
   : '';
 
 if (RAW_DASHBOARD_URL && !DASHBOARD_URL) {
-  console.warn(
+  logger.warn(
     `[${localTimestamp()}] DASHBOARD_URL="${RAW_DASHBOARD_URL}" is not a valid http/https URL — deep-links in notifications will be disabled.`,
   );
 }
@@ -45,7 +46,7 @@ function buildDashboardLink(systemId: string): string | undefined {
  */
 export async function evaluateAlerts(db: Knex, windowId: string): Promise<number> {
   if (!windowId) {
-    console.warn(`[${localTimestamp()}] evaluateAlerts called without windowId, skipping.`);
+    logger.warn(`[${localTimestamp()}] evaluateAlerts called without windowId, skipping.`);
     return 0;
   }
 
@@ -231,12 +232,12 @@ export async function evaluateAlerts(db: Knex, windowId: string): Promise<number
         }
       }
     } catch (err) {
-      console.error(`[${localTimestamp()}] Alert evaluation error for rule ${rule.id}:`, err);
+      logger.error(`[${localTimestamp()}] Alert evaluation error for rule ${rule.id}:`, err);
     }
   }
 
   if (sent > 0) {
-    console.log(`[${localTimestamp()}] Alert evaluation: ${sent} notifications sent.`);
+    logger.debug(`[${localTimestamp()}] Alert evaluation: ${sent} notifications sent.`);
   }
 
   return sent;
@@ -262,7 +263,7 @@ async function loadActiveSilences(db: Knex): Promise<ParsedSilence[]> {
       const scope = typeof silence.scope === 'string' ? JSON.parse(silence.scope) : silence.scope;
       result.push({ id: silence.id, scope });
     } catch {
-      console.error(`[${localTimestamp()}] Skipping silence ${silence.id}: corrupted scope JSON`);
+      logger.error(`[${localTimestamp()}] Skipping silence ${silence.id}: corrupted scope JSON`);
     }
   }
   return result;

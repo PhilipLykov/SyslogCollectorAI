@@ -1,5 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { Knex } from 'knex';
+import { logger } from '../../config/logger.js';
 import { localTimestamp } from '../../config/index.js';
 import { getConnectorAdapter } from './registry.js';
 import { normalizeEntry, computeNormalizedHash } from '../ingest/normalize.js';
@@ -20,7 +21,7 @@ export async function runConnectorPoll(db: Knex): Promise<void> {
 
     const adapter = getConnectorAdapter(conn.type);
     if (!adapter) {
-      console.warn(`[${localTimestamp()}] No adapter for connector type "${conn.type}" (${conn.id})`);
+      logger.warn(`[${localTimestamp()}] No adapter for connector type "${conn.type}" (${conn.id})`);
       continue;
     }
 
@@ -32,7 +33,7 @@ export async function runConnectorPoll(db: Knex): Promise<void> {
         try {
           validateUrl(config.url);
         } catch (err) {
-          console.error(`[${localTimestamp()}] Connector "${conn.name}" URL validation failed:`, err);
+          logger.error(`[${localTimestamp()}] Connector "${conn.name}" URL validation failed:`, err);
           continue;
         }
       }
@@ -104,11 +105,11 @@ export async function runConnectorPoll(db: Knex): Promise<void> {
         await upsertCursor(db, conn.id, newCursor);
       }
 
-      console.log(
+      logger.debug(
         `[${localTimestamp()}] Connector "${conn.name}" (${conn.type}): fetched=${events.length}, ingested=${rows.length}`,
       );
     } catch (err) {
-      console.error(`[${localTimestamp()}] Connector "${conn.name}" (${conn.id}) error:`, err);
+      logger.error(`[${localTimestamp()}] Connector "${conn.name}" (${conn.id}) error:`, err);
       // Cursor is NOT advanced on error, so next poll retries the same window.
       // This is intentional to avoid data loss, but may cause duplicates
       // if partial processing occurred before the error.
@@ -150,12 +151,12 @@ export function startConnectorScheduler(
     }
   }, intervalMs);
 
-  console.log(`[${localTimestamp()}] Connector scheduler started (interval=${intervalMs}ms).`);
+  logger.info(`[${localTimestamp()}] Connector scheduler started (interval=${intervalMs}ms).`);
 
   return {
     stop: () => {
       clearInterval(timer);
-      console.log(`[${localTimestamp()}] Connector scheduler stopped.`);
+      logger.info(`[${localTimestamp()}] Connector scheduler stopped.`);
     },
   };
 }

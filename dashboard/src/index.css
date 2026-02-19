@@ -3392,6 +3392,40 @@ input:focus-visible,
   color: var(--text-muted);
 }
 
+.ee-page-input {
+  width: 52px;
+  padding: 2px 6px;
+  font-size: 0.85rem;
+  text-align: center;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.ee-page-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(129, 140, 248, 0.2);
+}
+
+/* Hide spinner arrows on number input */
+.ee-page-input::-webkit-outer-spin-button,
+.ee-page-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.ee-page-input[type=number] {
+  -moz-appearance: textfield;
+}
+
+.ee-filtered-badge {
+  margin-left: 6px;
+  font-size: 0.8rem;
+  color: var(--accent);
+  font-weight: 600;
+}
+
 /* ── Search keyword highlight ── */
 
 .ee-highlight {

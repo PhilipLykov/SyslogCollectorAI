@@ -1,5 +1,6 @@
 import type { FastifyRequest, FastifyReply, FastifyInstance } from 'fastify';
 import { createHash } from 'node:crypto';
+import { logger } from '../config/logger.js';
 import { findApiKeyByHash } from './apiKeys.js';
 import { getDb } from '../db/index.js';
 import { localTimestamp } from '../config/index.js';
@@ -70,7 +71,7 @@ export function requireAuth(permission: Permission | Permission[]) {
             const userPerms = await getPermissionsForRole(user.role);
 
             if (!perms.some((p) => hasPermission(userPerms, p))) {
-              console.log(
+              logger.warn(
                 `[${localTimestamp()}] AUTH_FAIL: user "${user.username}" lacks permission "${perms.join(' | ')}"`,
               );
               return reply.code(403).send({ error: 'Insufficient permissions' });
@@ -85,7 +86,7 @@ export function requireAuth(permission: Permission | Permission[]) {
         }
 
         // Invalid/expired session token
-        console.log(`[${localTimestamp()}] AUTH_FAIL: invalid session token from ${request.ip}`);
+        logger.warn(`[${localTimestamp()}] AUTH_FAIL: invalid session token from ${request.ip}`);
         return reply.code(401).send({ error: 'Authentication required' });
       }
     }
@@ -97,20 +98,20 @@ export function requireAuth(permission: Permission | Permission[]) {
     }
 
     if (!rawKey || typeof rawKey !== 'string') {
-      console.log(`[${localTimestamp()}] AUTH_FAIL: missing credentials from ${request.ip}`);
+      logger.warn(`[${localTimestamp()}] AUTH_FAIL: missing credentials from ${request.ip}`);
       return reply.code(401).send({ error: 'Authentication required' });
     }
 
     const keyRow = await findApiKeyByHash(db, rawKey);
 
     if (!keyRow) {
-      console.log(`[${localTimestamp()}] AUTH_FAIL: invalid API key from ${request.ip}`);
+      logger.warn(`[${localTimestamp()}] AUTH_FAIL: invalid API key from ${request.ip}`);
       return reply.code(401).send({ error: 'Authentication required' });
     }
 
     // Check if key is active
     if (keyRow.is_active === false) {
-      console.log(`[${localTimestamp()}] AUTH_FAIL: revoked API key "${keyRow.name}" from ${request.ip}`);
+      logger.warn(`[${localTimestamp()}] AUTH_FAIL: revoked API key "${keyRow.name}" from ${request.ip}`);
       return reply.code(401).send({ error: 'Authentication required' });
     }
 
@@ -118,7 +119,7 @@ export function requireAuth(permission: Permission | Permission[]) {
     if (keyRow.expires_at) {
       const expiresAt = new Date(keyRow.expires_at);
       if (expiresAt < new Date()) {
-        console.log(`[${localTimestamp()}] AUTH_FAIL: expired API key "${keyRow.name}" from ${request.ip}`);
+        logger.warn(`[${localTimestamp()}] AUTH_FAIL: expired API key "${keyRow.name}" from ${request.ip}`);
         return reply.code(401).send({ error: 'Authentication required' });
       }
     }
@@ -130,7 +131,7 @@ export function requireAuth(permission: Permission | Permission[]) {
       allowedIps.length > 0 &&
       !allowedIps.includes(request.ip ?? '')
     ) {
-      console.log(
+      logger.warn(
         `[${localTimestamp()}] AUTH_FAIL: API key "${keyRow.name}" IP ${request.ip ?? 'unknown'} not in allowlist`,
       );
       return reply.code(403).send({ error: 'Insufficient permissions' });
@@ -138,7 +139,7 @@ export function requireAuth(permission: Permission | Permission[]) {
 
     const keyPerms = getPermissionsForScope(keyRow.scope);
     if (!perms.some((p) => hasPermission(keyPerms, p))) {
-      console.log(
+      logger.warn(
         `[${localTimestamp()}] AUTH_FAIL: API key scope "${keyRow.scope}" lacks permission "${perms.join(' | ')}" from ${request.ip}`,
       );
       return reply.code(403).send({ error: 'Insufficient permissions' });
@@ -148,7 +149,7 @@ export function requireAuth(permission: Permission | Permission[]) {
     db('api_keys')
       .where({ id: keyRow.id })
       .update({ last_used_at: new Date() })
-      .catch((err) => { console.error(`[${localTimestamp()}] Failed to update api_key last_used_at:`, err.message); });
+      .catch((err) => { logger.error(`[${localTimestamp()}] Failed to update api_key last_used_at:`, err.message); });
 
     request.currentUser = null;
     request.currentSession = null;

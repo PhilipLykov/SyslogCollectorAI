@@ -1098,6 +1098,7 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
     multiline_reassembly: true,
     max_future_drift_seconds: 300,  // 5 minutes — events further in the future are clamped to now
     max_event_message_length: 8192,
+    normalize_sql_statements: false,
   };
 
   /** GET /api/v1/pipeline-config — return current pipeline config with defaults. */
@@ -1161,6 +1162,11 @@ export async function registerFeaturesRoutes(app: FastifyInstance): Promise<void
       if (body.multiline_reassembly !== undefined) {
         if (typeof body.multiline_reassembly !== 'boolean') {
           return reply.code(400).send({ error: 'multiline_reassembly must be a boolean.' });
+        }
+      }
+      if (body.normalize_sql_statements !== undefined) {
+        if (typeof body.normalize_sql_statements !== 'boolean') {
+          return reply.code(400).send({ error: 'normalize_sql_statements must be a boolean.' });
         }
       }
       if (body.max_future_drift_seconds !== undefined) {

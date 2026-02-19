@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { Knex } from 'knex';
 import { localTimestamp } from '../../config/index.js';
 import { getEventSource } from '../../services/eventSourceFactory.js';
+import { logger } from '../../config/logger.js';
 
 const DEFAULT_WINDOW_MINUTES = 5;
 
@@ -68,14 +69,14 @@ export async function createWindows(
     } catch (err: any) {
       // Per-system error handling: log and continue with other systems.
       // Prevents one failing system (e.g. ES connection down) from blocking all.
-      console.error(
+      logger.error(
         `[${localTimestamp()}] Windowing: error processing system "${system.name}" (${system.id}): ${err.message}`,
       );
     }
   }
 
   if (created.length > 0) {
-    console.log(`[${localTimestamp()}] Windows created: ${created.length}`);
+    logger.debug(`[${localTimestamp()}] Windows created: ${created.length}`);
   }
 
   return created;

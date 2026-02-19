@@ -1,6 +1,7 @@
 import type { Knex } from 'knex';
 import type { NormalizedEvent, LogSource, LogSourceSelector } from '../../types/index.js';
 import { localTimestamp } from '../../config/index.js';
+import { logger } from '../../config/logger.js';
 
 /**
  * Cached log sources, sorted by priority (ascending = evaluated first).
@@ -34,7 +35,7 @@ async function loadSources(db: Knex): Promise<LogSource[]> {
       try {
         selector = typeof r.selector === 'string' ? JSON.parse(r.selector) : (r.selector ?? {});
       } catch {
-        console.error(`[${localTimestamp()}] Invalid JSON selector for log_source ${r.id}, skipping.`);
+        logger.error(`[${localTimestamp()}] Invalid JSON selector for log_source ${r.id}, skipping.`);
       }
       if (!selector || typeof selector !== 'object') {
         selector = {};

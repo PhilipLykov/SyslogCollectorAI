@@ -1363,6 +1363,7 @@ export interface PipelineConfig {
   multiline_reassembly: boolean;
   max_future_drift_seconds: number;
   max_event_message_length: number;
+  normalize_sql_statements: boolean;
 }
 
 export interface PipelineConfigResponse {

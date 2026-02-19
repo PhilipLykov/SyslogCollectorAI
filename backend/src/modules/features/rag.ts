@@ -1,5 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { Knex } from 'knex';
+import { logger } from '../../config/logger.js';
 import { localTimestamp } from '../../config/index.js';
 import { resolveAiConfig, resolveCustomPrompts, resolveTaskModels } from '../llm/aiConfig.js';
 import { DEFAULT_RAG_SYSTEM_PROMPT, humanAge } from '../llm/adapter.js';
@@ -290,14 +291,14 @@ export async function askQuestion(
       }),
     });
   } catch (netErr: any) {
-    console.error(`[${localTimestamp()}] RAG LLM network error: ${netErr.message}`);
+    logger.error(`[${localTimestamp()}] RAG LLM network error: ${netErr.message}`);
     throw new Error('Failed to reach the AI service. Please check network and base URL configuration.');
   }
 
   if (!res.ok) {
     // Don't leak raw error details to the client
     const errorText = await res.text();
-    console.error(`[${localTimestamp()}] RAG LLM error ${res.status}: ${errorText}`);
+    logger.error(`[${localTimestamp()}] RAG LLM error ${res.status}: ${errorText}`);
     throw new Error('Failed to process your question. Please try again later.');
   }
 
@@ -305,7 +306,7 @@ export async function askQuestion(
   try {
     data = await res.json();
   } catch {
-    console.error(`[${localTimestamp()}] RAG LLM returned invalid JSON`);
+    logger.error(`[${localTimestamp()}] RAG LLM returned invalid JSON`);
     throw new Error('Failed to process your question. Please try again later.');
   }
   const answer = data.choices?.[0]?.message?.content ?? 'Unable to generate an answer.';
@@ -327,11 +328,11 @@ export async function askQuestion(
       cost_estimate: cost,
     });
   } catch (trackErr: any) {
-    console.error(`[${localTimestamp()}] RAG usage tracking failed: ${trackErr.message}`);
+    logger.error(`[${localTimestamp()}] RAG usage tracking failed: ${trackErr.message}`);
     // Don't fail the request if tracking fails
   }
 
-  console.log(
+  logger.debug(
     `[${localTimestamp()}] RAG query answered ` +
     `(findings=${findingsRows.length}, summaries=${sampledMetaRows.length}/${metaRows.length}, model=${effectiveModel})`,
   );

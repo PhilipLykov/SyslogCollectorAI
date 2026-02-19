@@ -30,7 +30,6 @@ import {
 } from '../api';
 import { ScoreBars, CRITERIA_LABELS } from './ScoreBar';
 import { AskAiPanel } from './AskAiPanel';
-import { MultiSelect } from './MultiSelect';
 import { hasPermission } from '../App';
 
 /** Auto-refresh interval for findings (ms). */
@@ -46,11 +45,9 @@ interface DrillDownProps {
 }
 
 export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshSystem }: DrillDownProps) {
-  const [events, setEvents] = useState<LogEvent[]>([]);
   const [meta, setMeta] = useState<MetaResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [expandedRow, setExpandedRow] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
 
@@ -185,58 +182,16 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
     return false;
   }, []);
 
-  // ── Event filter state (multi-select) ───────────────────
-  const [filterSeverity, setFilterSeverity] = useState<string[]>([]);
-  const [filterHost, setFilterHost] = useState<string[]>([]);
-  const [filterProgram, setFilterProgram] = useState<string[]>([]);
-  const [filterService, setFilterService] = useState<string[]>([]);
-  const [filterFacility, setFilterFacility] = useState<string[]>([]);
-
-  // Track all unique values seen (accumulated across loads to keep options stable)
-  const [filterOptions, setFilterOptions] = useState<{
-    severity: string[]; host: string[]; program: string[]; service: string[]; facility: string[];
-  }>({ severity: [], host: [], program: [], service: [], facility: [] });
-
   // Stable reference for auth error handler
   const onAuthErrorRef = useRef(onAuthError);
   onAuthErrorRef.current = onAuthError;
 
-  // ── Load events + meta ──────────────────────────────────
+  // ── Load meta-analysis summary ─────────────────────────
   const loadData = useCallback(() => {
     setLoading(true);
     setError('');
-
-    Promise.all([
-      fetchSystemEvents(system.id, {
-        limit: 200,
-        severity: filterSeverity.length > 0 ? filterSeverity : undefined,
-        host: filterHost.length > 0 ? filterHost : undefined,
-        program: filterProgram.length > 0 ? filterProgram : undefined,
-        service: filterService.length > 0 ? filterService : undefined,
-        facility: filterFacility.length > 0 ? filterFacility : undefined,
-      }),
-      fetchSystemMeta(system.id).catch(() => null),
-    ])
-      .then(([evts, m]) => {
-        setEvents(evts);
-        setMeta(m);
-
-        // Accumulate unique filter option values (merge with existing to keep options stable)
-        setFilterOptions((prev) => {
-          const merge = (existing: string[], newVals: (string | null | undefined)[]) => {
-            const set = new Set(existing);
-            for (const v of newVals) { if (v) set.add(v); }
-            return Array.from(set).sort();
-          };
-          return {
-            severity: merge(prev.severity, evts.map((e) => e.severity)),
-            host: merge(prev.host, evts.map((e) => e.host)),
-            program: merge(prev.program, evts.map((e) => e.program)),
-            service: merge(prev.service, evts.map((e) => e.service)),
-            facility: merge(prev.facility, evts.map((e) => e.facility)),
-          };
-        });
-      })
+    fetchSystemMeta(system.id)
+      .then((m) => setMeta(m))
       .catch((err) => {
         const msg = err instanceof Error ? err.message : String(err);
         if (msg.includes('Authentication')) {
@@ -246,7 +201,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
         setError(msg);
       })
       .finally(() => setLoading(false));
-  }, [system.id, filterSeverity, filterHost, filterProgram, filterService, filterFacility]);
+  }, [system.id]);
 
   // ── Load findings ───────────────────────────────────────
   const loadFindings = useCallback(async () => {
@@ -271,35 +226,6 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
     loadFindings();
   }, [loadData, loadFindings]);
 
-  // ── Seed filter options from an unfiltered fetch (runs once) ──
-  // When user applies a filter, loadData fetches only matching events.
-  // This one-time unfiltered fetch ensures dropdown options include ALL values.
-  const filterSeeded = useRef(false);
-  useEffect(() => {
-    if (filterSeeded.current) return;
-    filterSeeded.current = true;
-    // Only seed if filters are already active (initial unfiltered loadData covers the initial case)
-    const hasFilters = filterSeverity.length > 0 || filterHost.length > 0 || filterProgram.length > 0 || filterService.length > 0 || filterFacility.length > 0;
-    if (hasFilters) {
-      fetchSystemEvents(system.id, { limit: 200 }).then((evts) => {
-        setFilterOptions((prev) => {
-          const merge = (existing: string[], newVals: (string | null | undefined)[]) => {
-            const set = new Set(existing);
-            for (const v of newVals) { if (v) set.add(v); }
-            return Array.from(set).sort();
-          };
-          return {
-            severity: merge(prev.severity, evts.map((e) => e.severity)),
-            host: merge(prev.host, evts.map((e) => e.host)),
-            program: merge(prev.program, evts.map((e) => e.program)),
-            service: merge(prev.service, evts.map((e) => e.service)),
-            facility: merge(prev.facility, evts.map((e) => e.facility)),
-          };
-        });
-      }).catch(() => { /* ignore — main loadData will show error */ });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [system.id]);
 
   // ── Auto-refresh findings ───────────────────────────────
   useEffect(() => {
@@ -313,54 +239,6 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
   useEffect(() => {
     headingRef.current?.focus();
   }, []);
-
-  const toggleRow = (id: string) => {
-    setExpandedRow((prev) => (prev === id ? null : id));
-  };
-
-  /** Build plain-text representation of an event for clipboard. */
-  const eventToText = (e: LogEvent): string => {
-    const lines: string[] = [
-      `Event ID:    ${e.id}`,
-      `Timestamp:   ${safeDate(e.timestamp)}`,
-      `System:      ${system.name}`,
-      `Severity:    ${e.severity ?? '—'}`,
-      `Host:        ${e.host ?? '—'}`,
-      `Source IP:   ${e.source_ip ?? '—'}`,
-      `Program:     ${e.program ?? '—'}`,
-      `Service:     ${e.service ?? '—'}`,
-      `Facility:    ${e.facility ?? '—'}`,
-    ];
-    if (e.received_at) lines.push(`Received:    ${safeDate(e.received_at)}`);
-    if (e.trace_id) lines.push(`Trace ID:    ${e.trace_id}`);
-    if (e.span_id) lines.push(`Span ID:     ${e.span_id}`);
-    if (e.external_id) lines.push(`External ID: ${e.external_id}`);
-    if (e.acknowledged_at) lines.push(`Acknowledged: ${safeDate(e.acknowledged_at)}`);
-    lines.push('', '--- Message ---', e.message);
-    if (e.raw) {
-      lines.push('', '--- Raw Data ---', typeof e.raw === 'string' ? e.raw : JSON.stringify(e.raw, null, 2));
-    }
-    return lines.join('\n');
-  };
-
-  const handleCopyEvent = async (e: LogEvent) => {
-    try {
-      await navigator.clipboard.writeText(eventToText(e));
-      setCopiedId(e.id);
-      setTimeout(() => setCopiedId((prev) => (prev === e.id ? null : prev)), 2000);
-    } catch {
-      const ta = document.createElement('textarea');
-      ta.value = eventToText(e);
-      ta.style.position = 'fixed';
-      ta.style.left = '-9999px';
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      document.body.removeChild(ta);
-      setCopiedId(e.id);
-      setTimeout(() => setCopiedId((prev) => (prev === e.id ? null : prev)), 2000);
-    }
-  };
 
   /** Build plain-text from an EventScoreRecord (criterion drill-down row). */
   const scoreRecordToText = (ev: EventScoreRecord): string => {
@@ -1493,30 +1371,20 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
                                     title={`View event ${eid}`}
                                     onClick={(ev) => {
                                       ev.stopPropagation();
-                                      // Try to scroll to it if it's in the loaded list
-                                      const row = document.getElementById(`event-row-${eid}`);
-                                      if (row) {
-                                        row.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                                        setExpandedRow(eid);
-                                        row.classList.add('event-row-highlight');
-                                        setTimeout(() => row.classList.remove('event-row-highlight'), 3000);
-                                      } else {
-                                        // Event not in loaded list — fetch by ID and show in modal
-                                        setProofEventLoading(true);
-                                        setProofEvent(null);
-                                        fetchSystemEvents(system.id, { event_ids: [eid], limit: 1 })
-                                          .then((evts) => {
-                                            if (evts.length > 0) {
-                                              setProofEvent(evts[0]);
-                                            } else {
-                                              setProofEvent({ id: eid, system_id: system.id, timestamp: '', message: '(Event not found — it may have been deleted by retention.)' } as LogEvent);
-                                            }
-                                          })
-                                          .catch(() => {
-                                            setProofEvent({ id: eid, system_id: system.id, timestamp: '', message: '(Failed to load event.)' } as LogEvent);
-                                          })
-                                          .finally(() => setProofEventLoading(false));
-                                      }
+                                      setProofEventLoading(true);
+                                      setProofEvent(null);
+                                      fetchSystemEvents(system.id, { event_ids: [eid], limit: 1 })
+                                        .then((evts) => {
+                                          if (evts.length > 0) {
+                                            setProofEvent(evts[0]);
+                                          } else {
+                                            setProofEvent({ id: eid, system_id: system.id, timestamp: '', message: '(Event not found — it may have been deleted by retention.)' } as LogEvent);
+                                          }
+                                        })
+                                        .catch(() => {
+                                          setProofEvent({ id: eid, system_id: system.id, timestamp: '', message: '(Failed to load event.)' } as LogEvent);
+                                        })
+                                        .finally(() => setProofEventLoading(false));
                                     }}
                                   >
                                     Event #{idx + 1}
@@ -1615,225 +1483,10 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
         />
       )}
 
-      {/* ── Event filters ─────────────────────────────────── */}
-      {(events.length > 0 || filterSeverity.length > 0 || filterHost.length > 0 || filterProgram.length > 0 || filterService.length > 0 || filterFacility.length > 0) && (
-        <div className="event-filters-bar">
-          <span className="event-filters-label">Filters:</span>
-          <div className="event-filter-item">
-            <label>Severity</label>
-            <MultiSelect
-              value={filterSeverity}
-              options={filterOptions.severity}
-              onChange={setFilterSeverity}
-              placeholder="All"
-            />
-          </div>
-          <div className="event-filter-item">
-            <label>Host</label>
-            <MultiSelect
-              value={filterHost}
-              options={filterOptions.host}
-              onChange={setFilterHost}
-              placeholder="All"
-            />
-          </div>
-          <div className="event-filter-item">
-            <label>Program</label>
-            <MultiSelect
-              value={filterProgram}
-              options={filterOptions.program}
-              onChange={setFilterProgram}
-              placeholder="All"
-            />
-          </div>
-          <div className="event-filter-item">
-            <label>Service</label>
-            <MultiSelect
-              value={filterService}
-              options={filterOptions.service}
-              onChange={setFilterService}
-              placeholder="All"
-            />
-          </div>
-          <div className="event-filter-item">
-            <label>Facility</label>
-            <MultiSelect
-              value={filterFacility}
-              options={filterOptions.facility}
-              onChange={setFilterFacility}
-              placeholder="All"
-            />
-          </div>
-          {(filterSeverity.length > 0 || filterHost.length > 0 || filterProgram.length > 0 || filterService.length > 0 || filterFacility.length > 0) && (
-            <button
-              type="button"
-              className="btn btn-sm btn-outline event-filters-clear"
-              onClick={() => {
-                setFilterSeverity([]);
-                setFilterHost([]);
-                setFilterProgram([]);
-                setFilterService([]);
-                setFilterFacility([]);
-              }}
-            >
-              Clear all
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* Events table */}
-      {events.length > 0 && (
-        <div className="table-responsive">
-          <table className="events-table" aria-label={`Recent events for ${system.name}`}>
-            <caption className="sr-only">
-              Showing {events.length} most recent events for {system.name}
-              {events.length >= 200 && ' (limited to 200)'}
-            </caption>
-            <thead>
-              <tr>
-                <th scope="col">Time</th>
-                <th scope="col">Severity</th>
-                <th scope="col">Host</th>
-                <th scope="col">Source IP</th>
-                <th scope="col">Program</th>
-                <th scope="col">Message</th>
-              </tr>
-            </thead>
-            <tbody>
-              {events.map((e) => (
-                <Fragment key={e.id}>
-                  <tr
-                    id={`event-row-${e.id}`}
-                    className={`event-row ${expandedRow === e.id ? 'expanded' : ''}`}
-                    onClick={() => toggleRow(e.id)}
-                    tabIndex={0}
-                    onKeyDown={(ev) => {
-                      if (ev.key === 'Enter' || ev.key === ' ') {
-                        ev.preventDefault();
-                        toggleRow(e.id);
-                      }
-                    }}
-                    aria-expanded={expandedRow === e.id}
-                    role="row"
-                  >
-                    <td style={{ whiteSpace: 'nowrap' }}>
-                      {safeDate(e.timestamp)}
-                    </td>
-                    <td>
-                      {e.severity && (
-                        <span className={`severity-badge ${e.severity.toLowerCase()}`}>
-                          {e.severity}
-                        </span>
-                      )}
-                    </td>
-                    <td>{e.host ?? '—'}</td>
-                    <td>{e.source_ip ?? '—'}</td>
-                    <td>{e.program ?? '—'}</td>
-                    <td className={expandedRow === e.id ? 'message-expanded' : 'message-truncated'}>
-                      {e.message}
-                    </td>
-                  </tr>
-                  {expandedRow === e.id && (
-                    <tr className="ee-detail-row">
-                      <td colSpan={6}>
-                        <div className="ee-detail-content">
-                          <div className="ee-detail-grid">
-                            <div className="ee-detail-field ee-detail-field-wide">
-                              <strong>Event ID:</strong> <code className="ee-id-code">{e.id}</code>
-                            </div>
-                            <div className="ee-detail-field">
-                              <strong>Source IP:</strong> {e.source_ip ?? '—'}
-                            </div>
-                            <div className="ee-detail-field">
-                              <strong>Received:</strong> {e.received_at ? safeDate(e.received_at) : '—'}
-                            </div>
-                            <div className="ee-detail-field">
-                              <strong>Service:</strong> {e.service ?? '—'}
-                            </div>
-                            <div className="ee-detail-field">
-                              <strong>Facility:</strong> {e.facility ?? '—'}
-                            </div>
-                            {e.trace_id && (
-                              <div className="ee-detail-field">
-                                <strong>Trace ID:</strong> <code>{e.trace_id}</code>
-                              </div>
-                            )}
-                            {e.span_id && (
-                              <div className="ee-detail-field">
-                                <strong>Span ID:</strong> <code>{e.span_id}</code>
-                              </div>
-                            )}
-                          </div>
-                          <div className="ee-detail-message">
-                            <strong>Full message:</strong>
-                            <pre>{e.message}</pre>
-                          </div>
-                          {e.raw && (
-                            <div className="ee-detail-raw">
-                              <strong>Raw data:</strong>
-                              <pre>{typeof e.raw === 'string' ? e.raw : JSON.stringify(e.raw, null, 2)}</pre>
-                            </div>
-                          )}
-                          <div className="ee-detail-actions">
-                            <button
-                              className={`btn btn-sm ${copiedId === e.id ? 'btn-success-outline' : 'btn-outline'}`}
-                              onClick={(ev) => { ev.stopPropagation(); handleCopyEvent(e); }}
-                              title="Copy full event details to clipboard"
-                            >
-                              {copiedId === e.id ? 'Copied!' : 'Copy Event'}
-                            </button>
-                            {hasPermission(currentUser ?? null, 'events:acknowledge') && (
-                              isNormalBehavior(e.message, e.host ?? undefined, e.program ?? undefined) ? (
-                                <span className="mark-ok-done" title="Already marked as normal behavior">✓ Normal</span>
-                              ) : (
-                                <button
-                                  className="btn btn-sm btn-mark-ok"
-                                  onClick={(ev) => { ev.stopPropagation(); openMarkOkModal(e.id, e.message, system.id, e.host ?? undefined, e.program ?? undefined); }}
-                                  title="Mark this event pattern as normal behavior — future similar events will be ignored by AI"
-                                >
-                                  Mark OK
-                                </button>
-                              )
-                            )}
-                          </div>
-                        </div>
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
-              ))}
-            </tbody>
-          </table>
-
-          {events.length >= 200 && (
-            <p className="truncation-notice">
-              Showing the latest 200 events. Use the API for full access.
-            </p>
-          )}
-        </div>
-      )}
-
-      {!loading && events.length === 0 && (
-        <div className="empty-state">
-          {(filterSeverity.length > 0 || filterHost.length > 0 || filterProgram.length > 0 || filterService.length > 0 || filterFacility.length > 0) ? (
-            <>
-              <h3>No matching events</h3>
-              <p>No events match the current filters. Try adjusting or clearing the filters.</p>
-            </>
-          ) : (
-            <>
-              <h3>No events</h3>
-              <p>No events found for this system yet.</p>
-            </>
-          )}
-        </div>
-      )}
-
       {/* ── Mark as Normal Behavior Modal ── */}
       {/* ── Proof Event Detail Modal ── */}
       {(proofEvent || proofEventLoading) && (
-        <div className="modal-overlay" onClick={() => { if (!proofEventLoading) { setProofEvent(null); } }}>
+        <div className="modal-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget && !proofEventLoading) { setProofEvent(null); } }}>
           <div className="modal-content proof-event-modal" onClick={(ev) => ev.stopPropagation()}>
             <h3>Proof Event</h3>
             {proofEventLoading ? (
@@ -1867,7 +1520,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
 
       {/* ── Event Detail Modal (from criterion drill-down) ── */}
       {(detailEvent || detailEventLoading || detailEventNotFound) && (
-        <div className="modal-overlay" onClick={() => { if (!detailEventLoading) { setDetailEvent(null); setDetailEventNotFound(false); } }}>
+        <div className="modal-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget && !detailEventLoading) { setDetailEvent(null); setDetailEventNotFound(false); } }}>
           <div className="modal-content event-detail-modal" onClick={(ev) => ev.stopPropagation()}>
             <h3>Event Details</h3>
             {detailEventLoading ? (
@@ -1910,7 +1563,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
       )}
 
       {markOkModal && (
-        <div className="modal-overlay" onClick={() => !markOkLoading && setMarkOkModal(null)}>
+        <div className="modal-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget && !markOkLoading) setMarkOkModal(null); }}>
           <div className="modal-content mark-ok-modal" onClick={(ev) => ev.stopPropagation()}>
             <h3>Mark as Normal Behavior</h3>
             <p className="mark-ok-description">

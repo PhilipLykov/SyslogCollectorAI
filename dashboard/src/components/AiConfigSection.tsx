@@ -1537,6 +1537,19 @@ export function AiConfigSection({ onAuthError }: AiConfigSectionProps) {
                     Weight of meta-analysis score in the blended effective score (0.0 = per-event only, 1.0 = meta only). Default: 0.7.
                   </span>
                 </div>
+                <div className="tok-opt-row">
+                  <label className="tok-opt-toggle">
+                    <input
+                      type="checkbox"
+                      checked={pipeCfg.normalize_sql_statements === true}
+                      onChange={(e) => setPipeCfg({ ...pipeCfg, normalize_sql_statements: e.target.checked })}
+                    />
+                    Normalize SQL statements
+                  </label>
+                  <span className="form-hint">
+                    Collapse SQL clauses (WHERE, ORDER BY, LIMIT, etc.) in PostgreSQL STATEMENT lines so that the same query against the same table groups regardless of clause variations. Default: disabled.
+                  </span>
+                </div>
               </fieldset>
 
               <fieldset className="tok-opt-group">

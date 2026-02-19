@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { v4 as uuidv4 } from 'uuid';
 import type { Knex } from 'knex';
 import { localTimestamp } from '../../config/index.js';
+import { logger } from '../../config/logger.js';
 
 /**
  * Template extraction and dedup for events.
@@ -16,8 +17,33 @@ import { localTimestamp } from '../../config/index.js';
  * with occurrence counts, for scoring.
  */
 
+interface ParameterizeOptions {
+  normalizeSql?: boolean;
+}
+
+const MAX_JSON_PARSE_LENGTH = 32_768;
+
 // Replace variable parts of log messages with placeholders
-function parameterizeMessage(msg: string): string {
+function parameterizeMessage(msg: string, options?: ParameterizeOptions, _depth = 0): string {
+  // JSON-aware: extract the human-readable message from structured log JSON
+  // before parameterizing. Prevents quoted-string replacement from collapsing
+  // all JSON keys/values into identical "<STR>" placeholders.
+  // Guarded against deep recursion (max 3 levels) and oversized payloads.
+  if (_depth < 3 && msg.length <= MAX_JSON_PARSE_LENGTH) {
+    const trimmed = msg.trim();
+    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+      try {
+        const obj = JSON.parse(trimmed);
+        if (typeof obj === 'object' && obj !== null && !Array.isArray(obj)) {
+          const innerMsg = obj.msg ?? obj.message ?? obj.text;
+          if (typeof innerMsg === 'string' && innerMsg.trim().length > 0) {
+            return parameterizeMessage(innerMsg.trim(), options, _depth + 1);
+          }
+        }
+      } catch { /* not valid JSON, proceed normally */ }
+    }
+  }
+
   let result = msg;
 
   // Replace UUIDs
@@ -45,11 +71,12 @@ function parameterizeMessage(msg: string): string {
 
   // Normalize PostgreSQL STATEMENT lines: collapse WHERE/ORDER BY/LIMIT/etc.
   // so that the same query against the same table groups regardless of clause variations.
-  // Matches "STATEMENT:  <sql>" (PostgreSQL uses two spaces after STATEMENT:).
-  result = result.replace(
-    /STATEMENT:\s+(select|insert|update|delete)\b(.*?)\b(where|order\s+by|limit|offset|group\s+by|having|returning|on\s+conflict)\b.*/gi,
-    (_, verb, middle) => `STATEMENT: ${verb}${middle}<SQL_CLAUSES>`,
-  );
+  if (options?.normalizeSql) {
+    result = result.replace(
+      /STATEMENT:\s+(select|insert|update|delete)\b(.*?)\b(where|order\s+by|limit|offset|group\s+by|having|returning|on\s+conflict)\b.*/gi,
+      (_, verb, middle) => `STATEMENT: ${verb}${middle}<SQL_CLAUSES>`,
+    );
+  }
 
   return result;
 }
@@ -87,7 +114,10 @@ export async function extractTemplatesAndDedup(
   db: Knex,
   eventRows: Array<{ id: string; system_id: string; message: string; timestamp?: string }>,
   esSystemIds?: Set<string>,
+  options?: { normalizeSql?: boolean },
 ): Promise<TemplateRepresentative[]> {
+  const paramOpts: ParameterizeOptions = { normalizeSql: options?.normalizeSql };
+
   // Group events by parameterized template
   const groups = new Map<string, {
     templateText: string;
@@ -96,7 +126,7 @@ export async function extractTemplatesAndDedup(
   }>();
 
   for (const event of eventRows) {
-    const templateText = parameterizeMessage(event.message);
+    const templateText = parameterizeMessage(event.message, paramOpts);
     const patternHash = computePatternHash(templateText, event.system_id);
 
     if (!groups.has(patternHash)) {
@@ -174,7 +204,7 @@ export async function extractTemplatesAndDedup(
     });
   }
 
-  console.log(
+  logger.debug(
     `[${localTimestamp()}] Dedup: ${eventRows.length} events → ${representatives.length} templates`,
   );
 

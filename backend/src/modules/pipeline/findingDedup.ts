@@ -12,6 +12,7 @@
 
 import crypto from 'crypto';
 import { localTimestamp } from '../../config/index.js';
+import { logger } from '../../config/logger.js';
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -436,7 +437,7 @@ export function deduplicateFindings(
 
   stats.inserted = toInsert.length;
 
-  console.log(
+  logger.debug(
     `[${localTimestamp()}] Finding dedup: LLM returned ${stats.llmReturned}, ` +
     `intra-batch dupes=${stats.intraBatchDupes}, cross-ref dupes=${stats.crossRefDupes}, ` +
     `new to insert=${stats.inserted}`,

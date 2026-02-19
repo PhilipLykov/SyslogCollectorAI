@@ -107,6 +107,7 @@ export function EventExplorerView({ onAuthError }: Props) {
   const [sortBy, setSortBy] = useState('timestamp');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [page, setPage] = useState(1);
+  const [pageInput, setPageInput] = useState('');
 
   // ── Results ──────────────────────────────────────────────
   const [result, setResult] = useState<SearchEventsResponse | null>(null);
@@ -257,6 +258,7 @@ export function EventExplorerView({ onAuthError }: Props) {
   }, [filterTrigger]);
 
   const handlePageChange = (newPage: number) => {
+    setPageInput('');
     doSearch(newPage);
   };
 
@@ -311,6 +313,10 @@ export function EventExplorerView({ onAuthError }: Props) {
   };
 
   const totalPages = result ? Math.ceil(result.total / result.limit) : 0;
+
+  const hasActiveFilters = query.trim() !== '' || systemFilter !== '' || severityFilter.length > 0 ||
+    hostFilter.length > 0 || sourceIpFilter.length > 0 || programFilter.length > 0 ||
+    fromDate !== '' || toDate !== '';
 
   /** Render message with optional keyword highlighting. */
   const renderMessage = (text: string) => {
@@ -666,6 +672,7 @@ export function EventExplorerView({ onAuthError }: Props) {
         <div className="ee-footer">
           <div className="ee-total-count">
             Total: <strong>{result.total.toLocaleString()}</strong> event{result.total !== 1 ? 's' : ''}
+            {hasActiveFilters && <span className="ee-filtered-badge">(filtered)</span>}
             {result.events.length > 0 && (
               <span className="ee-showing">
                 {' '}(showing {((result.page - 1) * result.limit) + 1}{'\u2013'}{Math.min(result.page * result.limit, result.total)})
@@ -687,7 +694,32 @@ export function EventExplorerView({ onAuthError }: Props) {
                 Previous
               </button>
               <span className="ee-page-display">
-                Page {page} of {totalPages}
+                Page{' '}
+                <input
+                  type="number"
+                  className="ee-page-input"
+                  min={1}
+                  max={totalPages}
+                  value={pageInput || page}
+                  onChange={(e) => setPageInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      const num = parseInt(pageInput, 10);
+                      if (num >= 1 && num <= totalPages) {
+                        handlePageChange(num);
+                      }
+                      setPageInput('');
+                    }
+                  }}
+                  onBlur={() => {
+                    const num = parseInt(pageInput, 10);
+                    if (num >= 1 && num <= totalPages && num !== page) {
+                      handlePageChange(num);
+                    }
+                    setPageInput('');
+                  }}
+                />
+                {' '}of {totalPages}
               </span>
               <button
                 className="btn btn-sm btn-outline"

@@ -19,6 +19,7 @@ import {
 import { loadPrivacyFilterConfig, filterMetaEventForLlm } from '../llm/llmPrivacyFilter.js';
 import { getEventSource } from '../../services/eventSourceFactory.js';
 import { loadNormalBehaviorTemplates, filterNormalBehaviorEvents, matchesNormalBehavior } from './normalBehavior.js';
+import { logger } from '../../config/logger.js';
 
 const DEFAULT_W_META = 0.7;
 /** Default number of previous window summaries to include as context. */
@@ -89,7 +90,7 @@ export async function loadMetaAnalysisConfig(db: Knex): Promise<MetaAnalysisConf
       return { ...META_CONFIG_DEFAULTS, ...(parsed as Partial<MetaAnalysisConfig>) };
     }
   } catch (err) {
-    console.error(`[${localTimestamp()}] Failed to load meta_analysis_config:`, err);
+    logger.error(`[${localTimestamp()}] Failed to load meta_analysis_config:`, err);
   }
   return { ...META_CONFIG_DEFAULTS };
 }
@@ -132,7 +133,7 @@ export async function metaAnalyzeWindow(
   // Idempotency guard: skip if this window has already been analyzed
   const existingMeta = await db('meta_results').where({ window_id: windowId }).first();
   if (existingMeta) {
-    console.log(`[${localTimestamp()}] Meta-analyze: window ${windowId} already has a meta_result (${existingMeta.id}), skipping duplicate run.`);
+    logger.debug(`[${localTimestamp()}] Meta-analyze: window ${windowId} already has a meta_result (${existingMeta.id}), skipping duplicate run.`);
     return;
   }
 
@@ -191,7 +192,7 @@ export async function metaAnalyzeWindow(
   if (normalTemplates.length > 0) {
     const { filtered, excludedCount } = filterNormalBehaviorEvents(events, normalTemplates);
     if (excludedCount > 0) {
-      console.log(
+      logger.debug(
         `[${localTimestamp()}] Meta-analyze: ${excludedCount} events excluded as normal behavior (window=${windowId})`,
       );
       events = filtered;
@@ -200,7 +201,7 @@ export async function metaAnalyzeWindow(
 
   // ── Handle quiet windows: write zero effective scores + meta_results ──
   if (events.length === 0) {
-    console.log(`[${localTimestamp()}] Meta-analyze: no events in window ${windowId}, writing zero scores`);
+    logger.debug(`[${localTimestamp()}] Meta-analyze: no events in window ${windowId}, writing zero scores`);
     const nowIso = new Date().toISOString();
     for (const criterion of CRITERIA) {
       await db.raw(`
@@ -272,7 +273,7 @@ export async function metaAnalyzeWindow(
     }
     // Also check events without scores (they might not have been scored yet)
     if (allZero && scoreMap.size > 0) {
-      console.log(
+      logger.debug(
         `[${localTimestamp()}] Meta-analyze: all ${events.length} events scored 0 in window ${windowId}, ` +
         `skipping LLM call (O1 optimization)`,
       );
@@ -388,7 +389,7 @@ export async function metaAnalyzeWindow(
     // Only filter if we have at least 1 non-zero event (otherwise O1 would have caught it)
     if (nonZero.length > 0 && nonZero.length < eventsForLlm.length) {
       const removedCount = eventsForLlm.length - nonZero.length;
-      console.log(
+      logger.debug(
         `[${localTimestamp()}] Meta-analyze: O2 optimization removed ${removedCount} zero-score events ` +
         `from LLM context (${nonZero.length} remaining, window=${windowId})`,
       );
@@ -487,7 +488,7 @@ export async function metaAnalyzeWindow(
             auto_resolved: true,
           }),
         });
-      console.log(
+      logger.debug(
         `[${localTimestamp()}] Meta-analyze: auto-resolved ${findingsToAutoResolve.length} finding(s) matching normal-behavior templates (window=${windowId})`,
       );
     }
@@ -524,7 +525,7 @@ export async function metaAnalyzeWindow(
         });
         const removed = before - context.previousSummaries.length;
         if (removed > 0) {
-          console.log(
+          logger.debug(
             `[${localTimestamp()}] Meta-analyze: removed ${removed} previous summary/summaries ` +
             `referencing normal-behavior patterns (window=${windowId})`,
           );
@@ -578,7 +579,7 @@ export async function metaAnalyzeWindow(
           }
         }
       } catch (err) {
-        console.warn(
+        logger.warn(
           `[${localTimestamp()}] Meta-analyze: failed to fetch ES acked messages ` +
           `(non-critical, window=${windowId}): ${err instanceof Error ? err.message : err}`,
         );
@@ -606,7 +607,7 @@ export async function metaAnalyzeWindow(
         });
         const removed = before - context.previousSummaries.length;
         if (removed > 0) {
-          console.log(
+          logger.debug(
             `[${localTimestamp()}] Meta-analyze: removed ${removed} previous summary/summaries ` +
             `referencing acknowledged events (window=${windowId})`,
           );
@@ -633,7 +634,7 @@ export async function metaAnalyzeWindow(
       },
     ));
   } catch (err) {
-    console.error(
+    logger.error(
       `[${localTimestamp()}] LLM meta-analysis failed for window ${windowId} ` +
       `(system=${system.name}): ${err instanceof Error ? err.message : err}`,
     );
@@ -748,7 +749,7 @@ export async function metaAnalyzeWindow(
           severity: finding.severity,
           criterion: finding.criterion,
         });
-        console.log(
+        logger.debug(
           `[${localTimestamp()}] Recurring issue detected: new finding references ` +
           `resolved finding ${matchedResolved.id} (system ${system.id})`,
         );
@@ -857,7 +858,7 @@ export async function metaAnalyzeWindow(
 
         // Reject resolutions without event evidence
         if (mappedEventIds.length === 0) {
-          console.log(
+          logger.debug(
             `[${localTimestamp()}] Rejected LLM resolution for finding index ${resolvedEntry.index} ` +
             `(${openFinding.text.slice(0, 60)}…): no event_refs provided. ` +
             `Findings require event evidence to be resolved.`,
@@ -898,7 +899,7 @@ export async function metaAnalyzeWindow(
         ];
         const isContradictory = contradictoryPhrases.some((p) => evidenceText.includes(p));
         if (isContradictory) {
-          console.log(
+          logger.debug(
             `[${localTimestamp()}] Rejected LLM resolution for finding index ${resolvedEntry.index} ` +
             `(${openFinding.text.slice(0, 60)}…): evidence text contradicts resolution ` +
             `("${resolvedEntry.evidence?.slice(0, 100)}…"). Treating as still-active instead.`,
@@ -959,7 +960,7 @@ export async function metaAnalyzeWindow(
           }
         }
         if (allSelfReferential && anyRefChecked) {
-          console.log(
+          logger.debug(
             `[${localTimestamp()}] Rejected LLM resolution for finding index ${resolvedEntry.index} ` +
             `(${openFinding.text.slice(0, 60)}…): proof events describe the same problem, ` +
             `not a counter-event. Treating as still-active instead.`,
@@ -994,7 +995,7 @@ export async function metaAnalyzeWindow(
           }
         }
         if (allErrorSeverity && anyKnownSeverity) {
-          console.log(
+          logger.debug(
             `[${localTimestamp()}] Rejected LLM resolution for finding index ${resolvedEntry.index} ` +
             `(${openFinding.text.slice(0, 60)}…): all proof events have error-level severity ` +
             `(${eventRefs.map((r) => `[${r}]=${eventIndexToSeverity.get(r)}`).join(', ')}). ` +
@@ -1027,7 +1028,7 @@ export async function metaAnalyzeWindow(
             resolution_evidence: JSON.stringify(evidenceObj),
           });
 
-        console.log(
+        logger.debug(
           `[${localTimestamp()}] Resolved finding ${dbId} with event evidence: ` +
           `${mappedEventIds.length} event(s) referenced`,
         );
@@ -1056,7 +1057,7 @@ export async function metaAnalyzeWindow(
             consecutive_misses: 0,
             last_seen_at: nowIso,
           });
-        console.log(
+        logger.debug(
           `[${localTimestamp()}] Reset consecutive_misses for ${stillActiveDbIds.size} ` +
           `LLM-confirmed still-active finding(s) (system ${system.id})`,
         );
@@ -1075,7 +1076,7 @@ export async function metaAnalyzeWindow(
     const skipMissIncrement = hasOpenFindingsInContext && !llmClassifiedAnything;
 
     if (skipMissIncrement) {
-      console.log(
+      logger.debug(
         `[${localTimestamp()}] Skipping consecutive_misses increment: LLM returned empty ` +
         `still_active + resolved lists with ${context.openFindings.length} open finding(s) ` +
         `in context (system ${system.id})`,
@@ -1158,7 +1159,7 @@ export async function metaAnalyzeWindow(
                 event_ids: [],
               }),
             });
-          console.log(
+          logger.debug(
             `[${localTimestamp()}] Evicted ${evictIds.length} finding(s) ` +
             `(exceeded max_open_findings_per_system=${metaCfg.max_open_findings_per_system})`,
           );
@@ -1250,7 +1251,7 @@ export async function metaAnalyzeWindow(
     return refs.some((ref) => eventIndexToId.has(ref));
   }).length;
 
-  console.log(
+  logger.debug(
     `[${localTimestamp()}] Meta-analyze window ${windowId}: ` +
     `${events.length} events, ${eventsForLlm.length} templates, ` +
     `LLM returned ${result.findings.length} findings → ` +

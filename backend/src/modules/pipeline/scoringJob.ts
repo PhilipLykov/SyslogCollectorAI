@@ -10,6 +10,7 @@ import { buildScoringPrompt } from '../llm/adapter.js';
 import { loadPrivacyFilterConfig, filterEventForLlm } from '../llm/llmPrivacyFilter.js';
 import { getDefaultEventSource, getEventSource } from '../../services/eventSourceFactory.js';
 import { loadNormalBehaviorTemplates, filterNormalBehaviorEvents } from './normalBehavior.js';
+import { logger } from '../../config/logger.js';
 
 // ── Token Optimization config type ──────────────────────────
 export interface TokenOptimizationConfig {
@@ -107,11 +108,12 @@ function truncateMessage(msg: string, maxLen: number): string {
 export async function runPerEventScoringJob(
   db: Knex,
   llm: LlmAdapter,
-  options?: { limit?: number; systemId?: string },
+  options?: { limit?: number; systemId?: string; normalizeSql?: boolean },
 ): Promise<{ scored: number; templates: number; errors: number }> {
   const limit = options?.limit ?? 500;
+  const normalizeSql = options?.normalizeSql ?? false;
 
-  console.log(`[${localTimestamp()}] Per-event scoring job started (limit=${limit})`);
+  logger.debug(`[${localTimestamp()}] Per-event scoring job started (limit=${limit})`);
 
   // ── Load configs ─────────────────────────────────────────
   const customPrompts = await resolveCustomPrompts(db);
@@ -154,7 +156,7 @@ export async function runPerEventScoringJob(
   }
 
   if (unscoredEvents.length === 0) {
-    console.log(`[${localTimestamp()}] Per-event scoring: no unscored events found.`);
+    logger.debug(`[${localTimestamp()}] Per-event scoring: no unscored events found.`);
     return { scored: 0, templates: 0, errors: 0 };
   }
 
@@ -165,7 +167,7 @@ export async function runPerEventScoringJob(
   if (normalTemplates.length > 0) {
     const { filtered, excluded, excludedCount } = filterNormalBehaviorEvents(unscoredEvents, normalTemplates);
     if (excludedCount > 0) {
-      console.log(
+      logger.debug(
         `[${localTimestamp()}] Per-event scoring: ${excludedCount} events excluded as normal behavior`,
       );
       // Mark excluded events as scored so they won't be re-fetched
@@ -175,14 +177,14 @@ export async function runPerEventScoringJob(
   }
 
   if (unscoredEvents.length === 0) {
-    console.log(`[${localTimestamp()}] Per-event scoring: all events matched normal behavior templates.`);
+    logger.debug(`[${localTimestamp()}] Per-event scoring: all events matched normal behavior templates.`);
     return { scored: 0, templates: 0, errors: 0 };
   }
 
   const unscoredEventIds = new Set(unscoredEvents.map((e: any) => e.id));
 
   // 2. Dedup / template extraction (pass esSystemIds so ES events are linked via es_event_metadata)
-  const representatives = await extractTemplatesAndDedup(db, unscoredEvents, esSystemIds);
+  const representatives = await extractTemplatesAndDedup(db, unscoredEvents, esSystemIds, { normalizeSql });
 
   // Build event lookup map
   const eventMap = new Map(unscoredEvents.map((e: any) => [e.id, e]));
@@ -280,7 +282,7 @@ export async function runPerEventScoringJob(
     needsScoring.push(rep);
   }
 
-  console.log(
+  logger.debug(
     `[${localTimestamp()}] Token optimisation: ${representatives.length} templates → ` +
     `${severitySkipped.length} severity-skipped, ${cacheHits.length} cache-hits, ` +
     `${lowScoreSkipped.length} low-score-skipped, ${needsScoring.length} need LLM`,
@@ -316,7 +318,7 @@ export async function runPerEventScoringJob(
         scored += linkedEventIds.length;
       }
     } catch (err) {
-      console.error(`[${localTimestamp()}] Error writing cached/skipped scores for template ${rep.templateId}:`, err);
+      logger.error(`[${localTimestamp()}] Error writing cached/skipped scores for template ${rep.templateId}:`, err);
       errors++;
     }
   }
@@ -381,7 +383,7 @@ export async function runPerEventScoringJob(
           const scoreResult = scores[j];
 
           if (!scoreResult) {
-            console.warn(
+            logger.warn(
               `[${localTimestamp()}] LLM returned ${scores.length} scores for ${systemBatch.length} templates. Template ${j} has no score.`,
             );
             errors++;
@@ -405,7 +407,7 @@ export async function runPerEventScoringJob(
           scored += linkedEventIds.length;
         }
       } catch (err) {
-        console.error(`[${localTimestamp()}] Per-event scoring error for system ${systemId}:`, err);
+        logger.error(`[${localTimestamp()}] Per-event scoring error for system ${systemId}:`, err);
         errors += systemBatch.length;
       }
     }
@@ -436,7 +438,7 @@ export async function runPerEventScoringJob(
         });
       } catch (err) {
         // Non-critical — cache update failure shouldn't fail the job
-        console.warn(`[${localTimestamp()}] Failed to update template cache for ${templateId}:`, err);
+        logger.warn(`[${localTimestamp()}] Failed to update template cache for ${templateId}:`, err);
       }
     }
   }
@@ -459,7 +461,7 @@ export async function runPerEventScoringJob(
 
   const llmScoredCount = needsScoring.length;
   const savedCount = allSkipped.length;
-  console.log(
+  logger.debug(
     `[${localTimestamp()}] Per-event scoring complete: scored=${scored}, templates=${representatives.length}, ` +
     `LLM-scored=${llmScoredCount}, cache/skip-saved=${savedCount}, errors=${errors}, ` +
     `tokens=${totalTokenInput + totalTokenOutput}`,

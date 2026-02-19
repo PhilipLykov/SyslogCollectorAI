@@ -27,6 +27,7 @@
  */
 
 import { localTimestamp } from '../../config/index.js';
+import { logger } from '../../config/logger.js';
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -365,7 +366,7 @@ export function reassembleMultilineEntries(entries: unknown[]): unknown[] {
   if (mergedByNM > 0 || mergedByPid > 0) {
     const delta = entries.length - output.length;
     if (delta > 0) {
-      console.log(
+      logger.debug(
         `[${localTimestamp()}] Multiline reassembly: ${entries.length} → ${output.length} entries ` +
         `(merged ${delta}: ${mergedByNM > 0 ? `[N-M]=${nmConsumed.size}` : ''}${mergedByNM > 0 && mergedByPid > 0 ? ', ' : ''}` +
         `${mergedByPid > 0 ? `PID-group=${mergedByPid}` : ''})`,

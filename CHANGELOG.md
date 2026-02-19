@@ -5,6 +5,29 @@ All notable changes to LogSentinel AI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.6-beta] - 2026-02-19
+
+### Added
+- **Smart Re-evaluation Flow**: Manual re-evaluation now runs per-event scoring on unscored events before meta-analysis, ensuring the LLM operates on fully scored data. Recalculates effective scores both before and after the LLM call for immediate dashboard updates
+- **Shared Logger Module**: New `config/logger.ts` provides a centralized, level-aware logger for pipeline and middleware modules. Respects `LOG_LEVEL` environment variable with production-appropriate defaults (`warn` in production, `info` in development)
+- **Direct Page Navigation**: Event Explorer pagination now includes an editable page number input for jumping directly to any page
+- **Filtered Count Indicator**: Event Explorer shows a "(filtered)" badge when search filters are active, making it clear that the displayed total reflects filtered results
+
+### Changed
+- **Optimized Score Recalculation**: Moved the expensive normal-behavior regex check from inside the LATERAL subquery into a pre-computed CTE (`normal_ids`), so the regex scan runs once across the events table instead of once per (event x window x criterion) combination. Dramatic speed improvement for systems with many normal behavior templates
+- **Optimized Event Acknowledgement**: Combined 3 redundant PostgreSQL queries (UPDATE, SELECT ids, SELECT messages) in the `acknowledge-group` endpoint into a single `UPDATE ... RETURNING` statement
+- **Optimized Normal Behavior Template Creation**: Replaced the triple-nested loop in `retroactivelyApplyTemplate` (windows x criteria x regex) with a single call to the optimized `recalcEffectiveScores` CTE, reducing query count from ~36,000 to 2
+- **JSON-Aware Event Grouping**: `parameterizeMessage` now extracts the inner `msg`/`message`/`text` field from structured JSON log bodies (Pino, Bunyan, Winston) before parameterizing, preventing unrelated JSON events from collapsing into identical templates
+- **Reduced Self-Generated Logging**: Disabled Fastify automatic request logging (`disableRequestLogging: true`), downgraded all hot-path log messages (ingest, scoring, meta-analysis, dedup) to `debug` level, and converted all pipeline/middleware modules to use the shared logger. Added `LOG_LEVEL=warn` default in Docker Compose
+- **Broader Fluent Bit Self-Filter**: Updated `SELF_PATTERNS` in `docker-enrich.lua` to use suffix-based matching (`%-backend`, `%-dashboard`) instead of project-specific prefixes, preventing self-ingestion across all Docker Compose naming conventions
+- **Removed Raw Events List from DrillDown**: The generic events table with filters (severity, host, program, etc.) has been removed from the system drill-down view. Events are now accessed exclusively through criterion-specific scored views and the Event Explorer
+- **Modal Close Behavior**: All modals (Proof Event, Event Detail, Mark as Normal Behavior) now use `onMouseDown` with target check instead of `onClick` on the overlay, preventing accidental closure when text selection drags outside the modal
+
+### Fixed
+- **LOG_LEVEL Default Mismatch**: The shared logger and Fastify logger now use identical defaults — `warn` in production, `info` in development — regardless of whether the `LOG_LEVEL` env var is set
+- **Re-evaluate Missing SQL Normalization**: The re-evaluate endpoint now loads the `normalize_sql_statements` setting from pipeline config and passes it to per-event scoring, consistent with the pipeline orchestrator
+- **DrillDown `setExpandedRow` Reference Error**: Removed orphaned reference to the deleted `expandedRow` state in the finding resolution evidence link handler. Event detail now always opens in a modal instead of attempting to scroll to a removed events table row
+
 ## [0.8.5-beta] - 2026-02-16
 
 ### Added
