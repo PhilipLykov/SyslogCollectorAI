@@ -1260,18 +1260,20 @@ export async function metaAnalyzeWindow(
     });
   });
 
-  // ── Backfill key_event_ids for this system's findings that have none ──
-  // Retroactively populate key_event_ids by parsing [N] refs from finding text.
-  // This fixes findings created before the [N] parsing was deployed.
+  // ── Backfill key_event_ids for findings that have none ──
+  // Parse [N] refs from finding text (fast regex only, no word-overlap).
+  // Limited to 50 findings per run to avoid slowing down the pipeline.
   try {
-    const orphanFindings = await db('findings')
-      .where({ system_id: system.id })
-      .whereIn('status', ['open', 'acknowledged'])
-      .whereNull('key_event_ids')
-      .select('id', 'text');
+    if (eventIndexToId.size > 0) {
+      const orphans = await db('findings')
+        .where({ system_id: system.id })
+        .whereIn('status', ['open', 'acknowledged'])
+        .whereNull('key_event_ids')
+        .select('id', 'text')
+        .limit(50);
 
-    if (orphanFindings.length > 0 && eventIndexToId.size > 0) {
-      for (const f of orphanFindings) {
+      let backfilled = 0;
+      for (const f of orphans) {
         const refIds: string[] = [];
         const rp = /\[(\d+)\]/g;
         let rm: RegExpExecArray | null;
@@ -1279,34 +1281,16 @@ export async function metaAnalyzeWindow(
           const resolved = eventIndexToId.get(parseInt(rm[1], 10));
           if (resolved && !refIds.includes(resolved)) refIds.push(resolved);
         }
-
-        // Fallback: word overlap if no [N] refs
-        if (refIds.length === 0) {
-          const fWords = significantWords(f.text);
-          if (fWords.size > 0) {
-            for (const [eid, msg] of eventIndexToMessage) {
-              const evWords = significantWords(msg);
-              let overlap = 0;
-              for (const w of fWords) {
-                if (evWords.has(w)) overlap++;
-              }
-              if (overlap / fWords.size >= 0.3) {
-                const resolved = eventIndexToId.get(eid);
-                if (resolved && !refIds.includes(resolved)) refIds.push(resolved);
-              }
-            }
-          }
-        }
-
         if (refIds.length > 0) {
           await db('findings')
             .where({ id: f.id })
             .update({ key_event_ids: JSON.stringify(refIds.slice(0, 20)) });
+          backfilled++;
         }
       }
-      logger.debug(
-        `[${localTimestamp()}] Backfilled key_event_ids for ${orphanFindings.length} findings (system=${system.id})`,
-      );
+      if (backfilled > 0) {
+        logger.debug(`[${localTimestamp()}] Backfilled key_event_ids for ${backfilled}/${orphans.length} findings`);
+      }
     }
   } catch (err: any) {
     logger.warn(`[${localTimestamp()}] key_event_ids backfill failed: ${err.message}`);

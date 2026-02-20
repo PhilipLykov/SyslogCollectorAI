@@ -603,8 +603,6 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
             app.log.warn(`[${localTimestamp()}] Pre-reeval per-event scoring failed: ${err.message}`);
           }
 
-          try { await recalcEffectiveScores(db, systemId); } catch { /* ignore */ }
-
           const windowId = uuidv4();
           await db('windows').insert({
             id: windowId,
