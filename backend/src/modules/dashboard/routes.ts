@@ -95,6 +95,43 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
         };
       }
 
+      // 2b. Fallback: for systems with no effective_scores, compute live MAX from event_scores
+      const systemIdsWithScores = new Set(scoreMap.keys());
+      const systemsNeedingFallback = systems.filter((s: any) => !systemIdsWithScores.has(s.id));
+      if (systemsNeedingFallback.length > 0) {
+        const fallbackIds = systemsNeedingFallback.map((s: any) => s.id);
+        const fallbackRows = await db.raw(
+          `
+            SELECT e.system_id, es.criterion_id, MAX(es.score) as max_score
+            FROM event_scores es
+            JOIN events e ON e.id::text = es.event_id
+            WHERE e.system_id = ANY(?)
+              AND e.timestamp >= ?
+              AND es.score_type = 'event'
+              AND e.acknowledged_at IS NULL
+            GROUP BY e.system_id, es.criterion_id
+          `,
+          [fallbackIds, sinceWindow],
+        );
+        for (const row of fallbackRows.rows ?? []) {
+          const criterion = CRITERIA.find((c: any) => c.id === row.criterion_id);
+          if (!criterion) continue;
+          let sysScores = scoreMap.get(row.system_id);
+          if (!sysScores) {
+            sysScores = {};
+            scoreMap.set(row.system_id, sysScores);
+          }
+          if (!sysScores[criterion.slug]) {
+            const maxScore = Number(row.max_score) || 0;
+            sysScores[criterion.slug] = {
+              effective: maxScore,
+              meta: 0,
+              max_event: maxScore,
+            };
+          }
+        }
+      }
+
       // 3. Source counts per system (single query)
       const sourceCounts = await db('log_sources')
         .groupBy('system_id')

@@ -313,15 +313,190 @@ function reassemblePgLogPrefix(
 }
 
 // ═══════════════════════════════════════════════════════════════════
+//  Method 3: Generic fragment detection (same-second grouping)
+// ═══════════════════════════════════════════════════════════════════
+
+/**
+ * Regex matching lines that look like a log "head" — they start with a
+ * recognisable log-level marker or timestamp prefix, indicating the start
+ * of a new logical message.
+ */
+const GENERIC_HEAD_RE =
+  /^\s*(\[?(ERROR|WARN|WARNING|INFO|NOTICE|DEBUG|FATAL|PANIC|CRITICAL|TRACE|ALERT|EMERG)\]?\s*[:\-–—⚠❌ ]|(\d{4}[-/]\d{2}[-/]\d{2}|\d{2}[-/]\d{2}[-/]\d{4})\s)/i;
+
+/** Max lines per merged message (prevent runaway merges). */
+const MAX_FRAGMENT_MERGE = 20;
+
+/**
+ * Extract a second-level timestamp key from a raw entry.
+ * Looks at the `timestamp` or `@timestamp` field and truncates to seconds.
+ * Returns null if no usable timestamp is found.
+ */
+function extractTimestampSecond(e: RawEntry): string | null {
+  const raw = (e as any).timestamp ?? (e as any)['@timestamp'];
+  if (!raw || typeof raw !== 'string') return null;
+  // ISO 8601: "2026-02-19T23:58:14.123Z" → "2026-02-19T23:58:14"
+  // Syslog:   "Feb 19 23:58:14" → "Feb 19 23:58:14"
+  // Truncate to second-level by dropping sub-second and everything after
+  const isoMatch = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})/.exec(raw);
+  if (isoMatch) return isoMatch[1];
+  // Syslog-style "Mon DD HH:MM:SS" — already second-level
+  const syslogMatch = /^(\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})/.exec(raw);
+  if (syslogMatch) return syslogMatch[1];
+  return raw.slice(0, 19); // fallback: first 19 chars
+}
+
+/**
+ * Returns true if a message looks like a continuation fragment rather
+ * than the start of a new log entry.
+ */
+function isFragment(message: string): boolean {
+  if (GENERIC_HEAD_RE.test(message)) return false;
+  // Lines starting with typical continuation patterns: whitespace, braces,
+  // comma-prefixed properties, closing brackets, "at " (stack trace), etc.
+  if (/^\s+/.test(message)) return true;                       // indented
+  if (/^[{}),\]:]/.test(message)) return true;                 // structure continuation
+  if (/^at\s+/.test(message)) return true;                     // JS/Java stack trace
+  if (/^\.\.\.\s*\d+\s+/.test(message)) return true;           // "... 4 lines matching ..."
+  if (/^[a-zA-Z_]+:\s/.test(message) && message.length < 80) { // short key: value lines
+    // e.g. "schema: undefined," "table: undefined," "params: 1"
+    return true;
+  }
+  return false;
+}
+
+/** Index entry for the generic fragment group map. */
+interface GenericGroupEntry {
+  idx: number;
+  entry: RawEntry;
+  message: string;
+  isHead: boolean;
+}
+
+/**
+ * Generic fragment reassembly.
+ *
+ * Groups remaining (unprocessed) entries by (host, program, timestamp_second).
+ * Within each group, "head" lines absorb subsequent "fragment" lines.
+ *
+ * @param entries     Full batch
+ * @param result      Output array (indexed by original position)
+ * @param consumed    Indices already consumed by Methods 1 & 2
+ */
+function reassembleGenericFragments(
+  entries: unknown[],
+  result: (unknown | null | undefined)[],
+  consumed: Set<number>,
+): number {
+  const groups = new Map<string, GenericGroupEntry[]>();
+
+  // Pass 1: index unprocessed entries
+  for (let i = 0; i < entries.length; i++) {
+    if (consumed.has(i)) continue;
+    if (result[i] !== null) continue; // already placed by earlier methods
+
+    const e = entries[i];
+    if (!isValidEntry(e)) continue;
+
+    const ts = extractTimestampSecond(e);
+    if (!ts) continue;
+
+    const key = `${e.host ?? ''}\0${e.program ?? ''}\0${ts}`;
+    let group = groups.get(key);
+    if (!group) {
+      group = [];
+      groups.set(key, group);
+    }
+    group.push({
+      idx: i,
+      entry: e,
+      message: e.message!,
+      isHead: !isFragment(e.message!),
+    });
+  }
+
+  // Pass 2: merge fragments into heads
+  let mergedCount = 0;
+  for (const group of groups.values()) {
+    if (group.length < 2) continue; // nothing to merge
+
+    // Identify heads and fragments
+    const heads = group.filter((g) => g.isHead);
+    if (heads.length === 0) continue; // no heads — leave all as-is
+
+    // For each head, collect following fragments up to the next head
+    for (let h = 0; h < heads.length; h++) {
+      const head = heads[h];
+      const headGroupIdx = group.indexOf(head);
+      const nextHeadGroupIdx = h + 1 < heads.length
+        ? group.indexOf(heads[h + 1])
+        : group.length;
+
+      const fragments: GenericGroupEntry[] = [];
+      for (let f = headGroupIdx + 1; f < nextHeadGroupIdx && fragments.length < MAX_FRAGMENT_MERGE - 1; f++) {
+        if (!group[f].isHead) {
+          fragments.push(group[f]);
+        }
+      }
+
+      if (fragments.length === 0) continue;
+
+      // Merge: head message + fragment messages
+      const parts = [head.message, ...fragments.map((f) => f.message)];
+      const mergedMessage = parts.join('\n');
+
+      result[head.idx] = { ...head.entry, message: mergedMessage };
+      consumed.add(head.idx);
+
+      for (const frag of fragments) {
+        result[frag.idx] = undefined; // consumed
+        consumed.add(frag.idx);
+        mergedCount++;
+      }
+    }
+
+    // Fragments before the first head — merge into the first head
+    if (heads.length > 0) {
+      const firstHead = heads[0];
+      const firstHeadGroupIdx = group.indexOf(firstHead);
+      const orphansBefore: GenericGroupEntry[] = [];
+      for (let f = 0; f < firstHeadGroupIdx && orphansBefore.length < MAX_FRAGMENT_MERGE - 1; f++) {
+        if (!group[f].isHead && !consumed.has(group[f].idx)) {
+          orphansBefore.push(group[f]);
+        }
+      }
+      if (orphansBefore.length > 0) {
+        // Prepend orphans to the head's (already merged) message
+        const currentMsg = result[firstHead.idx]
+          ? (result[firstHead.idx] as RawEntry).message ?? firstHead.message
+          : firstHead.message;
+        const preParts = [...orphansBefore.map((o) => o.message), currentMsg];
+        const entry = result[firstHead.idx] ?? firstHead.entry;
+        result[firstHead.idx] = { ...(entry as RawEntry), message: preParts.join('\n') };
+        consumed.add(firstHead.idx);
+        for (const orphan of orphansBefore) {
+          result[orphan.idx] = undefined;
+          consumed.add(orphan.idx);
+          mergedCount++;
+        }
+      }
+    }
+  }
+
+  return mergedCount;
+}
+
+// ═══════════════════════════════════════════════════════════════════
 //  Public API
 // ═══════════════════════════════════════════════════════════════════
 
 /**
  * Reassemble multiline syslog entries in a batch.
  *
- * Applies two independent detection methods:
+ * Applies three independent detection methods:
  *   1. `[N-M]` continuation headers (group-based, handles interleaving)
  *   2. PID + timestamp grouping for standard PostgreSQL log prefix
+ *   3. Generic fragment detection (same host + program + second)
  *
  * Entries that do not match any multiline pattern pass through unchanged.
  *
@@ -342,6 +517,14 @@ export function reassembleMultilineEntries(entries: unknown[]): unknown[] {
   // Method 2: PID + timestamp grouping (on remaining entries)
   reassemblePgLogPrefix(entries, result, nmConsumed);
 
+  // Method 3: Generic fragment detection (on remaining entries)
+  const allConsumed = new Set(nmConsumed);
+  for (let i = 0; i < result.length; i++) {
+    if (result[i] !== null && result[i] !== undefined) allConsumed.add(i);
+    if (result[i] === undefined) allConsumed.add(i);
+  }
+  const mergedByGeneric = reassembleGenericFragments(entries, result, allConsumed);
+
   // Final assembly: collect results in original order
   const output: unknown[] = [];
   let mergedByNM = 0;
@@ -353,7 +536,7 @@ export function reassembleMultilineEntries(entries: unknown[]): unknown[] {
       continue;
     }
     if (result[i] !== null) {
-      // Placed by Method 1 or Method 2
+      // Placed by Method 1, 2, or 3
       output.push(result[i]);
       if (nmConsumed.has(i)) mergedByNM++;
       else mergedByPid++;
@@ -363,13 +546,17 @@ export function reassembleMultilineEntries(entries: unknown[]): unknown[] {
     }
   }
 
-  if (mergedByNM > 0 || mergedByPid > 0) {
+  const totalMerged = mergedByNM + mergedByPid + mergedByGeneric;
+  if (totalMerged > 0) {
     const delta = entries.length - output.length;
     if (delta > 0) {
+      const parts: string[] = [];
+      if (nmConsumed.size > 0) parts.push(`[N-M]=${nmConsumed.size}`);
+      if (mergedByPid > 0) parts.push(`PID-group=${mergedByPid}`);
+      if (mergedByGeneric > 0) parts.push(`generic=${mergedByGeneric}`);
       logger.debug(
         `[${localTimestamp()}] Multiline reassembly: ${entries.length} → ${output.length} entries ` +
-        `(merged ${delta}: ${mergedByNM > 0 ? `[N-M]=${nmConsumed.size}` : ''}${mergedByNM > 0 && mergedByPid > 0 ? ', ' : ''}` +
-        `${mergedByPid > 0 ? `PID-group=${mergedByPid}` : ''})`,
+        `(merged ${delta}: ${parts.join(', ')})`,
       );
     }
   }

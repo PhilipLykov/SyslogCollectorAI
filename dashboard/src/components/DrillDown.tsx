@@ -24,7 +24,6 @@ import {
   type NormalBehaviorPreview,
   fetchDashboardConfig,
   acknowledgeEventGroup,
-  unacknowledgeEventGroup,
   fetchEventsByIds,
   type EventDetail,
 } from '../api';
@@ -196,6 +195,10 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
         const msg = err instanceof Error ? err.message : String(err);
         if (msg.includes('Authentication')) {
           onAuthErrorRef.current();
+          return;
+        }
+        if (msg.includes('No meta result') || msg.includes('No windows found')) {
+          setMeta(null);
           return;
         }
         setError(msg);
@@ -732,38 +735,6 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
     }
   }, [ackingGroupKey, system.id, showAcknowledged, onRefreshSystem, loadFindings]);
 
-  // ── Per-group Un-ack handler ───────────────────────────
-  const handleUnackGroup = useCallback(async (groupKey: string) => {
-    if (ackingGroupKey) return;
-    setAckingGroupKey(groupKey);
-    try {
-      await unacknowledgeEventGroup({ system_id: system.id, group_key: groupKey });
-      // Refresh the criterion drill-down
-      if (selectedCriterion) {
-        const criterion = CRITERIA.find((c) => c.slug === selectedCriterion);
-        if (criterion) {
-          try {
-            const data = await fetchGroupedEventScores(system.id, {
-              criterion_id: criterion.id,
-              limit: 50,
-              min_score: 0.001,
-              show_acknowledged: showAcknowledged,
-            });
-            setCriterionGroups(data.filter((g) => !isNormalBehavior(g.message)));
-          } catch { /* ignore */ }
-        }
-      }
-      onRefreshSystem?.();
-      loadFindings();
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes('Authentication')) { onAuthErrorRef.current(); return; }
-      alert(`Un-ack failed: ${msg}`);
-    } finally {
-      setAckingGroupKey(null);
-    }
-  }, [ackingGroupKey, system.id, selectedCriterion, showAcknowledged, onRefreshSystem, loadFindings, isNormalBehavior]);
-
   // ── Show Events for a finding (fetch by key_event_ids) ──
   const handleShowFindingEvents = useCallback(async (findingId: string, keyEventIds: string[]) => {
     // Toggle off if already showing this finding's events
@@ -1020,7 +991,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
                       <th>Hosts</th>
                       <th>Program</th>
                       <th>Message</th>
-                      {hasPermission(currentUser ?? null, 'events:acknowledge') && <th style={{ width: '80px' }}>Actions</th>}
+                      {hasPermission(currentUser ?? null, 'events:acknowledge') && <th style={{ width: '160px' }}>Actions</th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -1083,14 +1054,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
                               <td className="criterion-actions-cell">
                                 {grp.acknowledged ? (
                                   <>
-                                    <button
-                                      className="btn btn-xs btn-outline"
-                                      onClick={(ev) => { ev.stopPropagation(); handleUnackGroup(grp.group_key); }}
-                                      disabled={ackingGroupKey === grp.group_key}
-                                      title="Un-acknowledge this event group — events will be re-scored"
-                                    >
-                                      {ackingGroupKey === grp.group_key ? '…' : 'Un-ack'}
-                                    </button>
+                                    <span className="ack-done-label" title="This event group has been acknowledged">Ack&apos;d</span>
                                     <button
                                       className={`btn btn-xs ${copiedId === grp.group_key ? 'btn-success-outline' : 'btn-outline'}`}
                                       onClick={(ev) => { ev.stopPropagation(); copyToClipboard(groupRecordToText(grp), grp.group_key); }}
@@ -1220,7 +1184,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
       )}
 
       {/* ── Meta summary ── */}
-      {meta && (
+      {!loading && (
         <div className="meta-summary">
           <div className="meta-summary-header">
             <span className="meta-summary-icon">&#x1F9E0;</span>
@@ -1242,12 +1206,20 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
               {reEvalMsg}
             </div>
           )}
-          <div className="meta-summary-body">
-            {meta.summary}
-          </div>
-          {meta.recommended_action && (
-            <div className="meta-summary-recommendation">
-              <strong>Recommended:</strong> {meta.recommended_action}
+          {meta ? (
+            <>
+              <div className="meta-summary-body">
+                {meta.summary}
+              </div>
+              {meta.recommended_action && (
+                <div className="meta-summary-recommendation">
+                  <strong>Recommended:</strong> {meta.recommended_action}
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="meta-summary-body" style={{ opacity: 0.6, fontStyle: 'italic' }}>
+              No AI analysis available yet. Click &ldquo;Re-evaluate&rdquo; to run the initial analysis.
             </div>
           )}
         </div>

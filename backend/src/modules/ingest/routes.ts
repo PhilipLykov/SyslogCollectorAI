@@ -256,7 +256,10 @@ export async function registerIngestRoutes(app: FastifyInstance): Promise<void> 
           await db.transaction(async (trx) => {
             const CHUNK_SIZE = 100;
             for (let i = 0; i < rows.length; i += CHUNK_SIZE) {
-              await trx('events').insert(rows.slice(i, i + CHUNK_SIZE));
+              await trx('events')
+                .insert(rows.slice(i, i + CHUNK_SIZE))
+                .onConflict(['normalized_hash', 'timestamp'])
+                .ignore();
             }
           });
         } catch (err) {

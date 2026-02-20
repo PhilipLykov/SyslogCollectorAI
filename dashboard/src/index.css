@@ -654,6 +654,12 @@ input:focus-visible,
   font-weight: 500;
   opacity: 0.8;
 }
+.ack-done-label {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  opacity: 0.7;
+  white-space: nowrap;
+}
 
 /* ── Per-group Ack button ──────────────────────────────── */
 .btn-ack-group {
@@ -681,7 +687,7 @@ input:focus-visible,
   display: flex;
   align-items: center;
   gap: 4px;
-  white-space: nowrap;
+  flex-wrap: wrap;
 }
 
 /* Show acknowledged toggle in criterion header */

@@ -1214,10 +1214,9 @@ export async function metaAnalyzeWindow(
     for (const criterion of CRITERIA) {
       const metaScore = Number((result.meta_scores as any)[criterion.slug]) || 0;
       const maxEventScore = maxScoreMap.get(criterion.id) ?? 0;
-      const effectiveMetaScore = maxEventScore === 0 ? 0 : metaScore;
-      const effectiveValue = wMeta * effectiveMetaScore + (1 - wMeta) * maxEventScore;
+      const effectiveValue = wMeta * metaScore + (1 - wMeta) * maxEventScore;
       effPlaceholders.push('(?, ?, ?, ?, ?, ?, ?)');
-      effValues.push(windowId, system.id, criterion.id, effectiveValue, effectiveMetaScore, maxEventScore, nowIso);
+      effValues.push(windowId, system.id, criterion.id, effectiveValue, metaScore, maxEventScore, nowIso);
     }
 
     await trx.raw(`

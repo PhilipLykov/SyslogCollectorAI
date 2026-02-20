@@ -1,4 +1,5 @@
 import type { getDb } from '../../db/index.js';
+import { CRITERIA } from '../../types/index.js';
 
 /** Default meta-weight for effective score blending (must match metaAnalyze). */
 export const DEFAULT_W_META = 0.7;
@@ -109,5 +110,63 @@ export async function recalcEffectiveScores(db: ReturnType<typeof getDb>, system
       AND eff.criterion_id = wm.criterion_id
   `, params);
 
-  return result.rowCount ?? 0;
+  const updatedCount = result.rowCount ?? 0;
+
+  // If no effective_scores rows were updated AND a systemId was provided,
+  // try to INSERT seed rows from live event_scores so the dashboard
+  // doesn't show 0 while waiting for the first meta-analysis run.
+  if (updatedCount === 0 && systemId) {
+    const latestWindow = await db('windows')
+      .where({ system_id: systemId })
+      .where('to_ts', '>=', since)
+      .orderBy('to_ts', 'desc')
+      .first();
+
+    if (latestWindow) {
+      const liveMaxRows = await db.raw(`
+        SELECT es.criterion_id, MAX(es.score) AS max_score
+        FROM event_scores es
+        JOIN events e ON e.id::text = es.event_id
+        WHERE e.system_id = ?
+          AND e.timestamp >= ?
+          AND e.acknowledged_at IS NULL
+          AND es.score_type = 'event'
+          AND e.id NOT IN (
+            SELECT DISTINCT en.id FROM events en
+            JOIN normal_behavior_templates nbt ON nbt.enabled = true
+              AND (nbt.system_id IS NULL OR nbt.system_id = en.system_id)
+              AND en.message ~* nbt.pattern
+              AND (nbt.host_pattern IS NULL OR en.host ~* nbt.host_pattern)
+              AND (nbt.program_pattern IS NULL OR en.program ~* nbt.program_pattern)
+            WHERE en.timestamp >= ?
+              AND en.system_id = ?
+          )
+        GROUP BY es.criterion_id
+      `, [systemId, since, since, systemId]);
+
+      const maxMap = new Map<number, number>();
+      for (const row of liveMaxRows.rows ?? []) {
+        maxMap.set(Number(row.criterion_id), Number(row.max_score) || 0);
+      }
+
+      if (maxMap.size > 0) {
+        const nowIso = new Date().toISOString();
+        for (const criterion of CRITERIA) {
+          const maxScore = maxMap.get(criterion.id) ?? 0;
+          const effectiveValue = (1 - DEFAULT_W_META) * maxScore;
+          await db.raw(`
+            INSERT INTO effective_scores (window_id, system_id, criterion_id, effective_value, meta_score, max_event_score, updated_at)
+            VALUES (?, ?, ?, ?, 0, ?, ?)
+            ON CONFLICT (window_id, system_id, criterion_id)
+            DO UPDATE SET max_event_score = EXCLUDED.max_event_score,
+                          effective_value = EXCLUDED.effective_value,
+                          updated_at = EXCLUDED.updated_at
+          `, [latestWindow.id, systemId, criterion.id, effectiveValue, maxScore, nowIso]);
+        }
+        return CRITERIA.length;
+      }
+    }
+  }
+
+  return updatedCount;
 }
