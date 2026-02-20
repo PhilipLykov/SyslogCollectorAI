@@ -31,13 +31,13 @@ async function loadSources(db: Knex): Promise<LogSource[]> {
   const promise = (async () => {
     const rows = await db('log_sources').orderBy('priority', 'asc').select('*');
     const sources = rows.map((r: any) => {
-      let selector: LogSourceSelector = {};
+      let selector: LogSourceSelector | LogSourceSelector[] = {};
       try {
         selector = typeof r.selector === 'string' ? JSON.parse(r.selector) : (r.selector ?? {});
       } catch {
         logger.error(`[${localTimestamp()}] Invalid JSON selector for log_source ${r.id}, skipping.`);
       }
-      if (!selector || typeof selector !== 'object') {
+      if (!selector || (typeof selector !== 'object' && !Array.isArray(selector))) {
         selector = {};
       }
       return { ...r, selector };
@@ -85,23 +85,28 @@ export async function matchSource(
   return null;
 }
 
-function matchesSelector(event: NormalizedEvent, selector: LogSourceSelector): boolean {
-  if (!selector || typeof selector !== 'object') return false;
+function matchesSelector(event: NormalizedEvent, selector: LogSourceSelector | LogSourceSelector[]): boolean {
+  if (Array.isArray(selector)) {
+    if (selector.length === 0) return false;
+    return selector.some(group => matchesSingleGroup(event, group));
+  }
+  return matchesSingleGroup(event, selector);
+}
 
-  const entries = Object.entries(selector).filter(([, v]) => v !== undefined && v !== '');
-  if (entries.length === 0) return false; // empty selector matches nothing
+function matchesSingleGroup(event: NormalizedEvent, group: LogSourceSelector): boolean {
+  if (!group || typeof group !== 'object') return false;
+
+  const entries = Object.entries(group).filter(([, v]) => v !== undefined && v !== '');
+  if (entries.length === 0) return false;
 
   for (const [key, pattern] of entries) {
     let eventValue: unknown = (event as any)[key];
 
-    // If key is not a direct event field, check inside raw
     if (eventValue === undefined && event.raw) {
       eventValue = event.raw[key];
     }
 
     if (eventValue === undefined || eventValue === null) {
-      // Universal wildcard patterns match even missing fields (catch-all support).
-      // Without this, a catch-all like {"host": ".*"} fails for events that lack a host field.
       const pat = String(pattern);
       if (pat === '.*' || pat === '^.*$' || pat === '.+' || pat === '^.+$') continue;
       return false;
@@ -109,12 +114,10 @@ function matchesSelector(event: NormalizedEvent, selector: LogSourceSelector): b
 
     const ev = String(eventValue);
 
-    // Selector values are regex patterns (case-insensitive)
     try {
       const regex = new RegExp(String(pattern), 'i');
       if (!regex.test(ev)) return false;
     } catch {
-      // If the pattern is not a valid regex, fall back to exact match (case-insensitive)
       if (ev.toLowerCase() !== String(pattern).toLowerCase()) return false;
     }
   }

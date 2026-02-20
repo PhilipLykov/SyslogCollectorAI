@@ -437,67 +437,54 @@ export class PgEventSource implements EventSource {
   // ── Maintenance & admin ────────────────────────────────────
 
   async deleteOldEvents(systemId: string, cutoffIso: string): Promise<BulkDeleteResult> {
-    let totalEventsDeleted = 0;
-    let totalScoresDeleted = 0;
+    // Step 1: Bulk delete scores
+    const scoreResult = await this.db.raw(
+      `DELETE FROM event_scores WHERE event_id IN (
+        SELECT id::text FROM events WHERE system_id = ? AND "timestamp" < ?
+      )`,
+      [systemId, cutoffIso],
+    );
+    const deletedScores = scoreResult.rowCount ?? 0;
 
-    let hasMore = true;
-    while (hasMore) {
-      const oldEventIds = await this.db('events')
-        .where({ system_id: systemId })
-        .where('timestamp', '<', cutoffIso)
-        .limit(1000)
-        .pluck('id');
+    // Step 2: Bulk delete events (leverages partition pruning on timestamp)
+    const eventResult = await this.db.raw(
+      `DELETE FROM events WHERE system_id = ? AND "timestamp" < ?`,
+      [systemId, cutoffIso],
+    );
+    const deletedEvents = eventResult.rowCount ?? 0;
 
-      if (oldEventIds.length === 0) {
-        hasMore = false;
-        break;
-      }
-
-      // Delete event_scores for these events
-      for (let i = 0; i < oldEventIds.length; i += 500) {
-        const chunk = oldEventIds.slice(i, i + 500);
-        const deleted = await this.db('event_scores').whereIn('event_id', chunk).del();
-        totalScoresDeleted += deleted;
-      }
-
-      // Delete the events
-      const eventsDeleted = await this.db('events').whereIn('id', oldEventIds).del();
-      totalEventsDeleted += eventsDeleted;
-
-      if (oldEventIds.length < 1000) hasMore = false;
-    }
-
-    return { deleted_events: totalEventsDeleted, deleted_scores: totalScoresDeleted };
+    return { deleted_events: deletedEvents, deleted_scores: deletedScores };
   }
 
   async bulkDeleteEvents(filters: BulkDeleteFilters): Promise<BulkDeleteResult> {
-    let totalEventsDeleted = 0;
-    let totalScoresDeleted = 0;
+    const conditions: string[] = [];
+    const params: any[] = [];
 
-    let hasMore = true;
-    while (hasMore) {
-      let idQuery = this.db('events').limit(1000);
-      if (filters.from) idQuery = idQuery.where('timestamp', '>=', filters.from);
-      if (filters.to) idQuery = idQuery.where('timestamp', '<=', filters.to);
-      if (filters.system_id) idQuery = idQuery.where({ system_id: filters.system_id });
+    if (filters.from) { conditions.push(`"timestamp" >= ?`); params.push(filters.from); }
+    if (filters.to) { conditions.push(`"timestamp" <= ?`); params.push(filters.to); }
+    if (filters.system_id) { conditions.push(`system_id = ?`); params.push(filters.system_id); }
 
-      const eventIds = await idQuery.pluck('id');
-      if (eventIds.length === 0) { hasMore = false; break; }
-
-      // Delete event_scores first
-      for (let i = 0; i < eventIds.length; i += 500) {
-        const chunk = eventIds.slice(i, i + 500);
-        const scoresDeleted = await this.db('event_scores').whereIn('event_id', chunk).del();
-        totalScoresDeleted += scoresDeleted;
-      }
-
-      const eventsDeleted = await this.db('events').whereIn('id', eventIds).del();
-      totalEventsDeleted += eventsDeleted;
-
-      if (eventIds.length < 1000) hasMore = false;
+    if (conditions.length === 0) {
+      return { deleted_events: 0, deleted_scores: 0 };
     }
 
-    return { deleted_events: totalEventsDeleted, deleted_scores: totalScoresDeleted };
+    const where = `WHERE ${conditions.join(' AND ')}`;
+
+    // Step 1: Bulk delete scores via subquery (single SQL)
+    const scoreResult = await this.db.raw(
+      `DELETE FROM event_scores WHERE event_id IN (SELECT id::text FROM events ${where})`,
+      params,
+    );
+    const deletedScores = scoreResult.rowCount ?? 0;
+
+    // Step 2: Bulk delete events (leverages partition pruning on timestamp)
+    const eventResult = await this.db.raw(
+      `DELETE FROM events ${where}`,
+      params,
+    );
+    const deletedEvents = eventResult.rowCount ?? 0;
+
+    return { deleted_events: deletedEvents, deleted_scores: deletedScores };
   }
 
   async totalEventCount(): Promise<number> {
@@ -508,14 +495,11 @@ export class PgEventSource implements EventSource {
   async cascadeDeleteSystem(systemId: string, trx: unknown): Promise<void> {
     const t = trx as Knex.Transaction;
 
-    // Delete event scores (depends on events)
-    const eventIds = await t('events').where({ system_id: systemId }).pluck('id');
-    if (eventIds.length > 0) {
-      for (let i = 0; i < eventIds.length; i += 500) {
-        await t('event_scores').whereIn('event_id', eventIds.slice(i, i + 500)).del();
-      }
-    }
-    // Delete events
+    // Bulk delete scores via subquery (avoids loading all IDs into memory)
+    await t.raw(
+      `DELETE FROM event_scores WHERE event_id IN (SELECT id::text FROM events WHERE system_id = ?)`,
+      [systemId],
+    );
     await t('events').where({ system_id: systemId }).del();
   }
 }

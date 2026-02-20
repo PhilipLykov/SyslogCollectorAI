@@ -191,7 +191,7 @@ export function SettingsView({ onAuthError, currentUser }: SettingsViewProps) {
   const handleCreateSource = async (
     systemId: string,
     label: string,
-    selector: Record<string, string>,
+    selector: Record<string, string> | Record<string, string>[],
     priority: number,
   ) => {
     setSaving(true);
@@ -211,7 +211,7 @@ export function SettingsView({ onAuthError, currentUser }: SettingsViewProps) {
   const handleUpdateSource = async (
     id: string,
     label: string,
-    selector: Record<string, string>,
+    selector: Record<string, string> | Record<string, string>[],
     priority: number,
   ) => {
     setSaving(true);
@@ -672,9 +672,16 @@ export function SettingsView({ onAuthError, currentUser }: SettingsViewProps) {
   );
 }
 
-/** Format selector object for display. */
-function formatSelector(selector: Record<string, string>): string {
-  const entries = Object.entries(selector);
-  if (entries.length === 0) return '{}';
-  return entries.map(([k, v]) => `${k}: "${v}"`).join(', ');
+/** Format selector object (or array of groups) for display. */
+function formatSelector(selector: Record<string, string> | Record<string, string>[]): string {
+  const formatGroup = (group: Record<string, string>): string => {
+    const entries = Object.entries(group);
+    if (entries.length === 0) return '{}';
+    return entries.map(([k, v]) => `${k}: "${v}"`).join(' AND ');
+  };
+  if (Array.isArray(selector)) {
+    if (selector.length === 0) return '{}';
+    return selector.map(formatGroup).join(' OR ');
+  }
+  return formatGroup(selector);
 }

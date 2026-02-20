@@ -13,6 +13,24 @@ import { metaAnalyzeWindow } from '../pipeline/metaAnalyze.js';
 import { recalcEffectiveScores } from '../events/recalcScores.js';
 import { runPerEventScoringJob } from '../pipeline/scoringJob.js';
 
+/** In-memory tracker for background re-evaluate jobs. */
+const reEvalJobs = new Map<string, {
+  status: 'processing' | 'done' | 'error';
+  result?: any;
+  error?: string;
+  startedAt: number;
+}>();
+
+/** Clean up completed jobs older than 5 minutes. */
+function cleanupReEvalJobs(): void {
+  const cutoff = Date.now() - 5 * 60 * 1000;
+  for (const [id, job] of reEvalJobs) {
+    if (job.startedAt < cutoff && job.status !== 'processing') {
+      reEvalJobs.delete(id);
+    }
+  }
+}
+
 /**
  * Dashboard-oriented API routes: system overview, drill-down, SSE stream.
  */
@@ -95,9 +113,14 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
         };
       }
 
-      // 2b. Fallback: for systems with no effective_scores, compute live MAX from event_scores
-      const systemIdsWithScores = new Set(scoreMap.keys());
-      const systemsNeedingFallback = systems.filter((s: any) => !systemIdsWithScores.has(s.id));
+      // 2b. Fallback: for systems with no effective_scores (or all-zero scores), compute live MAX from event_scores
+      const systemsNeedingFallback = systems.filter((s: any) => {
+        const scores = scoreMap.get(s.id);
+        if (!scores) return true;
+        return Object.values(scores).every(
+          (v: any) => (v.effective ?? 0) === 0 && (v.max_event ?? 0) === 0
+        );
+      });
       if (systemsNeedingFallback.length > 0) {
         const fallbackIds = systemsNeedingFallback.map((s: any) => s.id);
         const fallbackRows = await db.raw(
@@ -121,11 +144,12 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
             sysScores = {};
             scoreMap.set(row.system_id, sysScores);
           }
-          if (!sysScores[criterion.slug]) {
-            const maxScore = Number(row.max_score) || 0;
+          const maxScore = Number(row.max_score) || 0;
+          const existing = sysScores[criterion.slug];
+          if (!existing || (existing.effective === 0 && existing.max_event === 0)) {
             sysScores[criterion.slug] = {
               effective: maxScore,
-              meta: 0,
+              meta: existing?.meta ?? 0,
               max_event: maxScore,
             };
           }
@@ -551,93 +575,125 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
         }
       } catch { /* use default */ }
 
-      // Score any unscored events for this system first so that
-      // the meta-analysis operates on fully scored data.
-      try {
-        const scoringResult = await runPerEventScoringJob(db, llm, {
-          systemId,
-          limit: reevalMaxEvents,
-          normalizeSql,
-        });
-        if (scoringResult.scored > 0) {
-          app.log.info(`[${localTimestamp()}] Re-evaluate: scored ${scoringResult.scored} events for system ${systemId}`);
+      const jobId = uuidv4();
+      cleanupReEvalJobs();
+      reEvalJobs.set(jobId, { status: 'processing', startedAt: Date.now() });
+
+      // Capture request properties before reply.send() — after response is
+      // sent, the Fastify request object may be partially recycled.
+      const actorName = getActorName(request);
+      const requestIp = request.ip;
+      const userId = request.currentUser?.id;
+      const sessionId = request.currentSession?.id;
+      const systemName = system.name;
+
+      // Fire background work
+      setImmediate(async () => {
+        try {
+          try {
+            const scoringResult = await runPerEventScoringJob(db, llm, {
+              systemId,
+              limit: reevalMaxEvents,
+              normalizeSql,
+            });
+            if (scoringResult.scored > 0) {
+              app.log.info(`[${localTimestamp()}] Re-evaluate: scored ${scoringResult.scored} events for system ${systemId}`);
+            }
+          } catch (err: any) {
+            app.log.warn(`[${localTimestamp()}] Pre-reeval per-event scoring failed: ${err.message}`);
+          }
+
+          try { await recalcEffectiveScores(db, systemId); } catch { /* ignore */ }
+
+          const windowId = uuidv4();
+          await db('windows').insert({
+            id: windowId,
+            system_id: systemId,
+            from_ts,
+            to_ts,
+            trigger: 'manual',
+          });
+
+          await metaAnalyzeWindow(db, llm, windowId, {
+            excludeAcknowledged: true,
+            resetContext: true,
+            maxEvents: reevalMaxEvents,
+          });
+
+          try { await recalcEffectiveScores(db, systemId); } catch { /* ignore */ }
+
+          const newScores: Record<string, { effective: number; meta: number; max_event: number }> = {};
+          const effRows = await db('effective_scores').where({ window_id: windowId, system_id: systemId });
+          for (const row of effRows) {
+            const criterion = CRITERIA.find((c) => c.id === row.criterion_id);
+            if (criterion) {
+              newScores[criterion.slug] = {
+                effective: Number(row.effective_value) || 0,
+                meta: Number(row.meta_score) || 0,
+                max_event: Number(row.max_event_score) || 0,
+              };
+            }
+          }
+
+          await writeAuditLog(db, {
+            actor_name: actorName,
+            action: 'system_re_evaluate',
+            resource_type: 'monitored_system',
+            resource_id: systemId,
+            details: { window_id: windowId, event_count: eventCount },
+            ip: requestIp,
+            user_id: userId,
+            session_id: sessionId,
+          });
+
+          reEvalJobs.set(jobId, {
+            status: 'done',
+            startedAt: reEvalJobs.get(jobId)!.startedAt,
+            result: {
+              message: `Re-evaluation complete. Analyzed ${eventCount} events.`,
+              window_id: windowId,
+              event_count: eventCount,
+              scores: newScores,
+            },
+          });
+        } catch (err: any) {
+          app.log.error(`[${localTimestamp()}] Re-evaluate background job failed: ${err.message}`);
+          reEvalJobs.set(jobId, {
+            status: 'error',
+            startedAt: reEvalJobs.get(jobId)!.startedAt,
+            error: err.message || 'Re-evaluation failed.',
+          });
         }
-      } catch (err: any) {
-        app.log.warn(`[${localTimestamp()}] Pre-reeval per-event scoring failed: ${err.message}`);
-      }
-
-      // Recalculate effective scores BEFORE LLM call
-      try {
-        await recalcEffectiveScores(db, systemId);
-      } catch (err: any) {
-        app.log.warn(`[${localTimestamp()}] Pre-reeval recalc failed: ${err.message}`);
-      }
-
-      const windowId = uuidv4();
-      await db('windows').insert({
-        id: windowId,
-        system_id: systemId,
-        from_ts,
-        to_ts,
-        trigger: 'manual',
-      });
-
-      app.log.debug(
-        `[${localTimestamp()}] Re-evaluate triggered for system "${system.name}" (${systemId}), window ${windowId} [${from_ts} — ${to_ts}], ${eventCount} events`,
-      );
-
-      try {
-        await metaAnalyzeWindow(db, llm, windowId, {
-          excludeAcknowledged: true,
-          resetContext: true,
-          maxEvents: reevalMaxEvents,
-        });
-      } catch (err) {
-        app.log.error(
-          `[${localTimestamp()}] Re-evaluate meta-analysis failed for window ${windowId}: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        return reply.code(500).send({
-          error: 'Meta-analysis failed. Check AI configuration and try again.',
-        });
-      }
-
-      // Recalculate effective scores AFTER LLM call
-      try {
-        await recalcEffectiveScores(db, systemId);
-      } catch (err: any) {
-        app.log.warn(`[${localTimestamp()}] Post-reeval recalc failed: ${err.message}`);
-      }
-
-      // Fetch the new effective scores to return to the caller
-      const newScores: Record<string, { effective: number; meta: number; max_event: number }> = {};
-      const effRows = await db('effective_scores').where({ window_id: windowId, system_id: systemId });
-      for (const row of effRows) {
-        const criterion = CRITERIA.find((c) => c.id === row.criterion_id);
-        if (criterion) {
-          newScores[criterion.slug] = {
-            effective: Number(row.effective_value) || 0,
-            meta: Number(row.meta_score) || 0,
-            max_event: Number(row.max_event_score) || 0,
-          };
-        }
-      }
-
-      await writeAuditLog(db, {
-        actor_name: getActorName(request),
-        action: 'system_re_evaluate',
-        resource_type: 'monitored_system',
-        resource_id: systemId,
-        details: { window_id: windowId, event_count: eventCount },
-        ip: request.ip,
-        user_id: request.currentUser?.id,
-        session_id: request.currentSession?.id,
       });
 
       return reply.send({
-        message: `Meta-analysis completed for ${eventCount} events.`,
-        window_id: windowId,
+        jobId,
+        status: 'processing',
+        message: `Re-evaluation started for "${system.name}". Analyzing ${eventCount} events...`,
         event_count: eventCount,
-        scores: newScores,
+      });
+    },
+  );
+
+  // ── Poll re-evaluate job status ─────────────────────────────
+  app.get<{ Params: { systemId: string; jobId: string } }>(
+    '/api/v1/systems/:systemId/re-evaluate-status/:jobId',
+    { preHandler: requireAuth(PERMISSIONS.EVENTS_ACKNOWLEDGE) },
+    async (request, reply) => {
+      cleanupReEvalJobs();
+      const job = reEvalJobs.get(request.params.jobId);
+      if (!job) {
+        return reply.code(404).send({ error: 'Job not found or expired.' });
+      }
+      if (job.status === 'done') {
+        return reply.send({ status: 'done', ...job.result });
+      }
+      if (job.status === 'error') {
+        return reply.send({ status: 'error', error: job.error });
+      }
+      return reply.send({
+        status: 'processing',
+        elapsed_seconds: Math.round((Date.now() - job.startedAt) / 1000),
       });
     },
   );

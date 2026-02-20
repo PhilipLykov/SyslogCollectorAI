@@ -200,6 +200,8 @@ input:focus-visible,
 .btn-accent { width: auto; background: var(--accent); color: white; }
 .btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text); }
 .btn-outline:hover { background: var(--bg-hover); }
+.btn-active { background: var(--accent); color: white; border-color: var(--accent); }
+.text-secondary { color: var(--text-secondary, #aaa); }
 
 /* ── Loading spinner ───────────────────────────────────── */
 
@@ -1753,6 +1755,56 @@ input:focus-visible,
 .selector-add-btn {
   align-self: flex-start;
   margin-top: 4px;
+}
+
+.selector-or-divider {
+  display: flex;
+  align-items: center;
+  margin: 0.5rem 0;
+  gap: 0.5rem;
+}
+.selector-or-divider::before,
+.selector-or-divider::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid var(--border-color, #444);
+}
+.selector-or-divider span {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--accent, #4fc3f7);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.selector-group {
+  padding: 0.5rem;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
+  background: rgba(255,255,255,0.02);
+}
+
+.selector-group-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.3rem;
+}
+
+.selector-and-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-secondary, #aaa);
+  text-transform: uppercase;
+  margin-right: 0.3rem;
+  min-width: 2rem;
+}
+
+.btn-danger-outline {
+  border-color: #e57373;
+  color: #e57373;
+}
+.btn-danger-outline:hover {
+  background: rgba(229, 115, 115, 0.15);
 }
 
 /* ── Button variants ───────────────────────────────────── */

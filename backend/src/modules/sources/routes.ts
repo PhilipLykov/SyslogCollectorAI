@@ -65,8 +65,14 @@ export async function registerSourceRoutes(app: FastifyInstance): Promise<void> 
       if (!label || typeof label !== 'string' || label.trim().length === 0) {
         return reply.code(400).send({ error: '"label" is required and must be a non-empty string.' });
       }
-      if (!selector || typeof selector !== 'object') {
-        return reply.code(400).send({ error: '"selector" is required and must be an object.' });
+      const isValidSelector = (s: unknown): boolean => {
+        if (Array.isArray(s)) {
+          return s.length > 0 && s.every(g => g && typeof g === 'object' && !Array.isArray(g));
+        }
+        return s !== null && typeof s === 'object' && !Array.isArray(s);
+      };
+      if (!isValidSelector(selector)) {
+        return reply.code(400).send({ error: '"selector" must be an object or array of objects.' });
       }
 
       // Verify system exists
@@ -128,8 +134,14 @@ export async function registerSourceRoutes(app: FastifyInstance): Promise<void> 
         updates.label = label.trim();
       }
       if (selector !== undefined) {
-        if (typeof selector !== 'object') {
-          return reply.code(400).send({ error: '"selector" must be an object.' });
+        const isValidSelector = (s: unknown): boolean => {
+          if (Array.isArray(s)) {
+            return s.length > 0 && s.every(g => g && typeof g === 'object' && !Array.isArray(g));
+          }
+          return s !== null && typeof s === 'object' && !Array.isArray(s);
+        };
+        if (!isValidSelector(selector)) {
+          return reply.code(400).send({ error: '"selector" must be an object or array of objects.' });
         }
         updates.selector = JSON.stringify(selector);
       }

@@ -3,6 +3,7 @@ import { localTimestamp } from '../../config/index.js';
 import { logger } from '../../config/logger.js';
 import { type LlmAdapter, OpenAiAdapter } from '../llm/adapter.js';
 import { resolveAiConfig } from '../llm/aiConfig.js';
+import { recalcEffectiveScores } from '../events/recalcScores.js';
 import { runPerEventScoringJob } from './scoringJob.js';
 import { createWindows } from './windowing.js';
 import { metaAnalyzeWindow } from './metaAnalyze.js';
@@ -75,6 +76,15 @@ export async function runPipeline(
       limit: options?.scoringLimit ?? pipeCfg.scoring_limit_per_run,
       normalizeSql: pipeCfg.normalize_sql_statements,
     });
+
+    // 1b. Propagate new event scores into existing effective_scores
+    if (scoringResult.scored > 0) {
+      try {
+        await recalcEffectiveScores(db, null);
+      } catch (err) {
+        logger.warn(`[${localTimestamp()}] Pipeline: recalcEffectiveScores failed:`, err);
+      }
+    }
 
     // 2. Create windows
     const windows = await createWindows(db, {
@@ -164,8 +174,8 @@ export function startPipelineScheduler(
     let maxMs = 120 * 60_000;
     try {
       const cfg = await loadPipelineConfig(db);
-      minMs = cfg.pipeline_min_interval_minutes * 60_000;
-      maxMs = cfg.pipeline_max_interval_minutes * 60_000;
+      minMs = Math.max(1, cfg.pipeline_min_interval_minutes) * 60_000;
+      maxMs = Math.max(1, cfg.pipeline_max_interval_minutes) * 60_000;
     } catch { /* use defaults */ }
 
     const prevMs = currentIntervalMs;

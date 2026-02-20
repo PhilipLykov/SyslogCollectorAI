@@ -17,7 +17,7 @@ LogSentinel AI transforms raw log streams into actionable security and operation
 - **Token Optimization** — Intelligent deduplication via template extraction, score caching, severity pre-filtering, and configurable batch sizing reduce LLM costs by up to 80% without sacrificing analysis quality. Real-time usage tracking with per-model cost estimation keeps spending visible.
 - **JSON-Aware Event Grouping** — Structured log messages (Pino, Winston, Bunyan JSON) are automatically unpacked: the inner `msg`/`message` field is extracted for deduplication, preventing unrelated JSON events from collapsing into the same template.
 - **Dynamic Pipeline Scheduling** — The analysis pipeline adapts its interval based on activity: faster when events arrive (configurable min, default 15 min), exponential back-off to a configurable max (default 2 hours) during quiet periods, minimizing LLM calls for idle systems.
-- **Smart Re-evaluation Flow** — Manual re-evaluation first runs per-event scoring on any unscored events, then recalculates effective scores, then triggers LLM meta-analysis with a fresh context window. Configurable re-evaluation time window (default 7 days) and event cap (default 500).
+- **Async Re-evaluation Flow** — Manual re-evaluation runs in the background with real-time progress polling: first scores unscored events, recalculates effective scores, then triggers LLM meta-analysis with a fresh context window. The UI shows elapsed time and auto-refreshes when complete. Configurable time window (default 7 days) and event cap (default 500).
 - **Production-Grade Logging** — Centralized, level-aware logging across all backend modules. Automatic request logging disabled to prevent self-ingestion loops. `LOG_LEVEL` environment variable controls verbosity (default `warn` in production Docker, `info` in development). Fluent Bit self-filter patterns auto-detect project containers by naming convention.
 
 ### UX & UI
@@ -51,7 +51,7 @@ LogSentinel AI transforms raw log streams into actionable security and operation
 ### Enterprise-Grade Features
 
 - **Multi-System Monitoring** — Monitor unlimited systems from a single deployment. Each system has independent log source selectors (regex-based field matching with priority ordering), retention policies, and AI analysis pipelines.
-- **Flexible Log Source Matching** — Regex-based selectors match incoming events to systems by any combination of fields (host, source_ip, service, program, facility). Priority ordering ensures specific rules take precedence over catch-all rules.
+- **Flexible Log Source Matching with OR Groups** — Regex-based selectors match incoming events to systems by any combination of fields (host, source_ip, service, program, facility). Multiple AND-condition groups can be combined with OR logic, enabling complex routing like "match (host=web-01 AND program=nginx) OR (host=web-02 AND program=nginx)". Priority ordering ensures specific rules take precedence over catch-all rules.
 - **Comprehensive Alerting** — Five notification channels (Webhook, Pushover, NTfy, Gotify, Telegram) with configurable rules, severity thresholds, silence windows, throttle intervals, and recovery alerts. Secrets referenced via environment variables — never stored in the database.
 - **Compliance Export** — One-click export of events, scores, and findings in CSV or JSON format for regulatory compliance and external auditing.
 - **Per-Criterion AI Prompts** — Each of the 6 scoring criteria has an independently configurable system prompt, allowing security teams to inject domain-specific guidance (e.g., *"Flag any SSH brute force patterns"* for IT Security, *"Watch for disk I/O saturation"* for Performance).
@@ -109,7 +109,7 @@ LogSentinel AI transforms raw log streams into actionable security and operation
 | Backend | Node.js 22, Fastify, TypeScript |
 | Database | PostgreSQL 14+ (partitioned), Knex.js migrations, Elasticsearch 7+/8+ (optional, read-only hybrid) |
 | Frontend | React 19, Vite, TypeScript |
-| AI | OpenAI-compatible API (GPT-4o-mini, GPT-4o, Ollama, etc.) |
+| AI | OpenAI-compatible API (GPT-4o-mini, GPT-4.1, GPT-5, o3/o4-mini, Ollama, etc.) |
 | Auth | bcrypt, SHA-256 session tokens, RBAC (20 permissions) |
 | Deployment | Docker, docker-compose, nginx |
 | Security | Helmet, CORS, rate limiting, immutable audit log |

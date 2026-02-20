@@ -127,7 +127,7 @@ export interface LogSource {
   id: string;
   system_id: string;
   label: string;
-  selector: LogSourceSelector;
+  selector: LogSourceSelector | LogSourceSelector[];
   priority: number;
   created_at: string;
   updated_at: string;
@@ -136,13 +136,13 @@ export interface LogSource {
 export interface CreateLogSourceBody {
   system_id: string;
   label: string;
-  selector: LogSourceSelector;
+  selector: LogSourceSelector | LogSourceSelector[];
   priority?: number;
 }
 
 export interface UpdateLogSourceBody {
   label?: string;
-  selector?: LogSourceSelector;
+  selector?: LogSourceSelector | LogSourceSelector[];
   priority?: number;
 }
 
@@ -245,7 +245,7 @@ export interface Window {
   system_id: string;
   from_ts: string;
   to_ts: string;
-  trigger: 'time' | 'count';
+  trigger: 'time' | 'count' | 'manual';
   created_at: string;
 }
 

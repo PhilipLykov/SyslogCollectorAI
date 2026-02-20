@@ -19,6 +19,7 @@ import {
   createNormalBehaviorTemplate,
   fetchNormalBehaviorTemplates,
   reEvaluateSystem,
+  checkReEvaluateStatus,
   recalculateScores,
   type NormalBehaviorTemplate,
   type NormalBehaviorPreview,
@@ -85,6 +86,8 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
   // ── Re-evaluate meta-analysis state ─────────────────────
   const [reEvalLoading, setReEvalLoading] = useState(false);
   const [reEvalMsg, setReEvalMsg] = useState('');
+  const reEvalPollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mountedRef = useRef(true);
 
   // ── Recalculate scores state (fast, no LLM) ────────────
   const [recalcLoading, setRecalcLoading] = useState(false);
@@ -237,6 +240,15 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
     }, FINDINGS_POLL_INTERVAL);
     return () => clearInterval(timer);
   }, [loadFindings]);
+
+  // Cleanup: cancel re-evaluate poll and mark unmounted
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (reEvalPollRef.current) clearTimeout(reEvalPollRef.current);
+    };
+  }, []);
 
   // Move focus to heading on mount for accessibility
   useEffect(() => {
@@ -618,58 +630,99 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
     }
   }, [markOkModal, markOkPattern, markOkHostPattern, markOkProgramPattern, system.id, selectedCriterion, onRefreshSystem, loadNormalTemplates, isNormalBehavior, showAcknowledged]);
 
+  // Refs for values needed inside the poll closure (avoid stale captures)
+  const selectedCriterionRef = useRef(selectedCriterion);
+  selectedCriterionRef.current = selectedCriterion;
+  const showAcknowledgedRef = useRef(showAcknowledged);
+  showAcknowledgedRef.current = showAcknowledged;
+
   // ── Re-evaluate meta-analysis handler ───────────────────
   const handleReEvaluate = useCallback(async () => {
     if (reEvalLoading) return;
     if (!window.confirm(
-      'Re-evaluate meta-analysis for this system?\n\nThis will run a fresh AI analysis on recent events (excluding normal-behavior events). It may take 10-30 seconds.',
+      'Re-evaluate meta-analysis for this system?\n\nThis will run a fresh AI analysis on recent events. Progress will be shown below.',
     )) return;
 
     setReEvalLoading(true);
-    setReEvalMsg('');
+    setReEvalMsg('Processing...');
     try {
       const res = await reEvaluateSystem(system.id);
-      setReEvalMsg(res.message);
-      setTimeout(() => setReEvalMsg(''), 5000);
-
-      // Refresh criterion drill-down if open
-      if (selectedCriterion) {
-        const criterion = CRITERIA.find((c) => c.slug === selectedCriterion);
-        if (criterion) {
-          try {
-            const data = await fetchGroupedEventScores(system.id, {
-              criterion_id: criterion.id,
-              limit: 50,
-              min_score: 0.001,
-              show_acknowledged: showAcknowledged,
-            });
-            setCriterionGroups(data.filter((g) => !isNormalBehavior(g.message)));
-            setExpandedGroup(null);
-            setExpandedGroupEvents([]);
-          } catch { /* ignore */ }
+      if (!res.jobId) {
+        if (mountedRef.current) {
+          setReEvalMsg(res.message || 'Done.');
+          setTimeout(() => { if (mountedRef.current) setReEvalMsg(''); }, 5000);
+          setReEvalLoading(false);
         }
+        return;
       }
 
-      // Refresh meta summary text
-      try {
-        const freshMeta = await fetchSystemMeta(system.id);
-        if (freshMeta) setMeta(freshMeta);
-      } catch { /* ignore */ }
+      const jobId = res.jobId;
+      const poll = async () => {
+        if (!mountedRef.current) return;
+        try {
+          const status = await checkReEvaluateStatus(system.id, jobId);
+          if (!mountedRef.current) return;
 
-      // Refresh findings (re-evaluate may auto-resolve findings matching normal behavior)
-      loadFindings();
+          if (status.status === 'processing') {
+            setReEvalMsg(`Analyzing... ${status.elapsed_seconds ?? 0}s elapsed`);
+            reEvalPollRef.current = setTimeout(poll, 3000);
+            return;
+          }
+          if (status.status === 'error') {
+            setReEvalMsg(`Error: ${status.error ?? 'Unknown error'}`);
+            setTimeout(() => { if (mountedRef.current) setReEvalMsg(''); }, 10000);
+            setReEvalLoading(false);
+            return;
+          }
+          // Done — use refs to read current values (not stale closure captures)
+          setReEvalMsg(status.message || 'Re-evaluation complete.');
+          setTimeout(() => { if (mountedRef.current) setReEvalMsg(''); }, 5000);
 
-      // Refresh parent dashboard scores
-      onRefreshSystem?.();
+          const curCriterion = selectedCriterionRef.current;
+          if (curCriterion) {
+            const criterion = CRITERIA.find((c) => c.slug === curCriterion);
+            if (criterion) {
+              try {
+                const data = await fetchGroupedEventScores(system.id, {
+                  criterion_id: criterion.id,
+                  limit: 50,
+                  min_score: 0.001,
+                  show_acknowledged: showAcknowledgedRef.current,
+                });
+                if (mountedRef.current) {
+                  setCriterionGroups(data.filter((g) => !isNormalBehavior(g.message)));
+                  setExpandedGroup(null);
+                  setExpandedGroupEvents([]);
+                }
+              } catch { /* ignore */ }
+            }
+          }
+          try {
+            const freshMeta = await fetchSystemMeta(system.id);
+            if (mountedRef.current && freshMeta) setMeta(freshMeta);
+          } catch { /* ignore */ }
+          loadFindings();
+          onRefreshSystem?.();
+          if (mountedRef.current) setReEvalLoading(false);
+        } catch (err: unknown) {
+          if (!mountedRef.current) return;
+          const msg = err instanceof Error ? err.message : String(err);
+          if (msg.includes('Authentication')) { onAuthErrorRef.current(); return; }
+          setReEvalMsg(`Error: ${msg}`);
+          setTimeout(() => { if (mountedRef.current) setReEvalMsg(''); }, 10000);
+          setReEvalLoading(false);
+        }
+      };
+      reEvalPollRef.current = setTimeout(poll, 3000);
     } catch (err: unknown) {
+      if (!mountedRef.current) return;
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('Authentication')) { onAuthErrorRef.current(); return; }
       setReEvalMsg(`Error: ${msg}`);
-      setTimeout(() => setReEvalMsg(''), 6000);
-    } finally {
+      setTimeout(() => { if (mountedRef.current) setReEvalMsg(''); }, 10000);
       setReEvalLoading(false);
     }
-  }, [reEvalLoading, system.id, selectedCriterion, onRefreshSystem, loadFindings, isNormalBehavior, showAcknowledged]);
+  }, [reEvalLoading, system.id, onRefreshSystem, loadFindings, isNormalBehavior]);
 
   // ── Recalculate scores handler (fast, no LLM) ──────────
   const handleRecalculate = useCallback(async () => {

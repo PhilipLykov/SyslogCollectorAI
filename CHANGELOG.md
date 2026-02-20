@@ -5,6 +5,29 @@ All notable changes to LogSentinel AI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.7-beta] - 2026-02-20
+
+### Added
+- **Log Source OR Rule Groups**: Log source selectors now support multiple AND-condition groups combined with OR logic. This enables complex event routing such as "match (host=web-01 AND program=nginx) OR (host=web-02 AND program=apache)". The UI provides an intuitive group editor with "Add AND condition" and "Add OR group" buttons. Fully backward-compatible with existing single-object selectors
+- **Async Re-evaluation with Progress Polling**: The "Re-evaluate" endpoint now returns immediately with a job ID and processes scoring + meta-analysis in the background. The frontend polls every 3 seconds showing elapsed time, then auto-refreshes the drill-down and meta summary on completion
+- **Re-evaluate Job Status Endpoint**: New `GET /api/v1/systems/:systemId/re-evaluate-status/:jobId` endpoint for polling background re-evaluation jobs
+- **LLM Pricing for New Models**: Added pricing entries for GPT-4.1 family (nano/mini/base), GPT-5 family (nano/mini/base), GPT-5.1 (base/codex-mini/codex), GPT-5.2, o3, o3-pro, and o4-mini. Removed deprecated o1-mini
+
+### Changed
+- **Pipeline Orchestrator Propagates Scores**: The automatic pipeline now calls `recalcEffectiveScores` after per-event scoring, so newly scored events immediately update the dashboard without waiting for the next meta-analysis run
+- **Dashboard Score Fallback Widened**: The fallback mechanism that computes live scores from `event_scores` now also triggers when `effective_scores` exist but are all zero, not just when they are missing entirely
+- **Bulk Delete Optimization**: `bulkDeleteEvents`, `deleteOldEvents`, and `cascadeDeleteSystem` in PgEventSource now use single-statement bulk SQL DELETEs with subqueries instead of row-by-row loops, enabling instant cleanup of millions of records via PostgreSQL partition pruning
+- **AI Finding Event Link Parsing**: Findings now parse explicit `[1], [2], [3]` event references from LLM output and map them directly to event UUIDs via the event index. Word-overlap matching is used only as a fallback when no explicit references are found
+
+### Fixed
+- **Score Bars Stuck at 0**: Removed the `CASE WHEN new_max = 0 THEN 0 ELSE orig_meta END` guard in `recalcEffectiveScores` that was incorrectly zeroing out LLM meta-scores when no per-event scores existed. Meta-scores from the LLM are now always preserved, consistent with the fix already applied in `metaAnalyze.ts`
+- **Polling Memory Leak on Unmount**: The DrillDown re-evaluate polling now stores `setTimeout` handles in refs and clears them on unmount, preventing setState-on-unmounted-component warnings
+- **Stale Closure in Poll Refresh**: The poll completion handler now reads `selectedCriterion` and `showAcknowledged` from refs instead of closure captures, ensuring the correct criterion is refreshed even if the user changed tabs during polling
+- **Request Object Lifecycle in Async Re-evaluate**: Request properties (actor name, IP, user/session IDs) are now captured into local variables before `reply.send()`, preventing potential issues with Fastify recycling the request object post-response
+- **Pipeline Hot-Loop Risk**: Added `Math.max(1, ...)` guard on `pipeline_min_interval_minutes` and `pipeline_max_interval_minutes` to prevent a zero-delay scheduling loop if the database value is set to 0
+- **SourceForm Remove Button No-Op**: The "remove condition" button in the log source editor is now correctly disabled when a group has only one row, instead of appearing clickable but performing no action
+- **Missing CSS Classes**: Added `.btn-active` and `.text-secondary` CSS classes that were referenced in DrillDown but missing from the stylesheet
+
 ## [0.8.6-beta] - 2026-02-19
 
 ### Added

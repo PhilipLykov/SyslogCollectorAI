@@ -397,7 +397,7 @@ export interface LogSource {
   id: string;
   system_id: string;
   label: string;
-  selector: Record<string, string>;
+  selector: Record<string, string> | Record<string, string>[];
   priority: number;
   created_at: string;
   updated_at: string;
@@ -488,14 +488,22 @@ export async function fetchDashboardSystems(): Promise<DashboardSystem[]> {
 }
 
 export interface ReEvaluateResponse {
-  message: string;
-  window_id: string | null;
-  event_count: number;
+  jobId?: string;
+  status: 'processing' | 'done' | 'error';
+  message?: string;
+  window_id?: string | null;
+  event_count?: number;
   scores?: Record<string, { effective: number; meta: number; max_event: number }>;
+  error?: string;
+  elapsed_seconds?: number;
 }
 
 export async function reEvaluateSystem(systemId: string): Promise<ReEvaluateResponse> {
   return apiFetch(`/api/v1/systems/${systemId}/re-evaluate`, { method: 'POST' });
+}
+
+export async function checkReEvaluateStatus(systemId: string, jobId: string): Promise<ReEvaluateResponse> {
+  return apiFetch(`/api/v1/systems/${systemId}/re-evaluate-status/${jobId}`);
 }
 
 export async function recalculateScores(systemId: string): Promise<{ ok: boolean; updated_rows: number }> {
@@ -593,7 +601,7 @@ export async function fetchSources(systemId?: string): Promise<LogSource[]> {
 export async function createSource(data: {
   system_id: string;
   label: string;
-  selector: Record<string, string>;
+  selector: Record<string, string> | Record<string, string>[];
   priority?: number;
 }): Promise<LogSource> {
   return apiFetch('/api/v1/sources', {
@@ -604,7 +612,7 @@ export async function createSource(data: {
 
 export async function updateSource(
   id: string,
-  data: { label?: string; selector?: Record<string, string>; priority?: number },
+  data: { label?: string; selector?: Record<string, string> | Record<string, string>[]; priority?: number },
 ): Promise<LogSource> {
   return apiFetch(`/api/v1/sources/${id}`, {
     method: 'PUT',

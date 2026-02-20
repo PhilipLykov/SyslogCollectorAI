@@ -100,9 +100,8 @@ export async function recalcEffectiveScores(db: ReturnType<typeof getDb>, system
     )
     UPDATE effective_scores eff
     SET max_event_score = wm.new_max,
-        meta_score = CASE WHEN wm.new_max = 0 THEN 0 ELSE wm.orig_meta END,
-        effective_value = ? * (CASE WHEN wm.new_max = 0 THEN 0 ELSE wm.orig_meta END)
-                        + ? * wm.new_max,
+        meta_score = wm.orig_meta,
+        effective_value = ? * wm.orig_meta + ? * wm.new_max,
         updated_at = NOW()
     FROM window_max wm
     WHERE eff.window_id = wm.window_id

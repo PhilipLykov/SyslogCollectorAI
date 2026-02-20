@@ -786,19 +786,34 @@ export async function metaAnalyzeWindow(
       newlyInsertedIds.push(newId);
 
       // Match finding text to source events to store key_event_ids.
-      // Compare significant words in the finding against event messages.
-      const findingWords = significantWords(finding.text);
+      // PRIMARY: Parse [N] event references the LLM embeds in finding text.
       const matchedEventIds: string[] = [];
-      if (findingWords.size > 0) {
-        for (const [eid, msg] of eventIndexToMessage) {
-          const evWords = significantWords(msg);
-          let overlap = 0;
-          for (const w of findingWords) {
-            if (evWords.has(w)) overlap++;
-          }
-          if (findingWords.size > 0 && overlap / findingWords.size >= 0.3) {
-            const resolvedId = eventIndexToId.get(eid);
-            if (resolvedId) matchedEventIds.push(resolvedId);
+      const refPattern = /\[(\d+)\]/g;
+      let refMatch: RegExpExecArray | null;
+      while ((refMatch = refPattern.exec(finding.text)) !== null) {
+        const idx = parseInt(refMatch[1], 10);
+        const resolvedId = eventIndexToId.get(idx);
+        if (resolvedId && !matchedEventIds.includes(resolvedId)) {
+          matchedEventIds.push(resolvedId);
+        }
+      }
+
+      // FALLBACK: If no [N] references found, use word overlap matching.
+      if (matchedEventIds.length === 0) {
+        const findingWords = significantWords(finding.text);
+        if (findingWords.size > 0) {
+          for (const [eid, msg] of eventIndexToMessage) {
+            const evWords = significantWords(msg);
+            let overlap = 0;
+            for (const w of findingWords) {
+              if (evWords.has(w)) overlap++;
+            }
+            if (overlap / findingWords.size >= 0.3) {
+              const resolvedId = eventIndexToId.get(eid);
+              if (resolvedId && !matchedEventIds.includes(resolvedId)) {
+                matchedEventIds.push(resolvedId);
+              }
+            }
           }
         }
       }
