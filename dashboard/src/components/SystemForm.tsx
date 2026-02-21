@@ -7,6 +7,7 @@ interface SystemFormProps {
   initialDescription?: string;
   initialRetentionDays?: number | null;
   initialTzOffsetMinutes?: number | null;
+  initialTzName?: string | null;
   initialEventSource?: 'postgresql' | 'elasticsearch';
   initialEsConnectionId?: string | null;
   initialEsConfig?: Record<string, unknown> | null;
@@ -20,6 +21,7 @@ export interface SystemFormData {
   description: string;
   retention_days: number | null;
   tz_offset_minutes: number | null;
+  tz_name: string | null;
   event_source: 'postgresql' | 'elasticsearch';
   es_connection_id: string | null;
   es_config: Record<string, unknown> | null;
@@ -62,12 +64,77 @@ const TZ_OFFSETS = [
   { value: '780', label: 'UTC+13:00 (Samoa)' },
 ];
 
+/** Common IANA timezone identifiers grouped by region. */
+const IANA_TIMEZONES = [
+  { value: '', label: 'None (no timezone correction)' },
+  // Europe
+  { value: 'Europe/London', label: 'Europe/London (GMT/BST)' },
+  { value: 'Europe/Berlin', label: 'Europe/Berlin (CET/CEST)' },
+  { value: 'Europe/Paris', label: 'Europe/Paris (CET/CEST)' },
+  { value: 'Europe/Rome', label: 'Europe/Rome (CET/CEST)' },
+  { value: 'Europe/Madrid', label: 'Europe/Madrid (CET/CEST)' },
+  { value: 'Europe/Amsterdam', label: 'Europe/Amsterdam (CET/CEST)' },
+  { value: 'Europe/Brussels', label: 'Europe/Brussels (CET/CEST)' },
+  { value: 'Europe/Zurich', label: 'Europe/Zurich (CET/CEST)' },
+  { value: 'Europe/Vienna', label: 'Europe/Vienna (CET/CEST)' },
+  { value: 'Europe/Warsaw', label: 'Europe/Warsaw (CET/CEST)' },
+  { value: 'Europe/Prague', label: 'Europe/Prague (CET/CEST)' },
+  { value: 'Europe/Stockholm', label: 'Europe/Stockholm (CET/CEST)' },
+  { value: 'Europe/Helsinki', label: 'Europe/Helsinki (EET/EEST)' },
+  { value: 'Europe/Bucharest', label: 'Europe/Bucharest (EET/EEST)' },
+  { value: 'Europe/Chisinau', label: 'Europe/Chisinau (EET/EEST)' },
+  { value: 'Europe/Sofia', label: 'Europe/Sofia (EET/EEST)' },
+  { value: 'Europe/Athens', label: 'Europe/Athens (EET/EEST)' },
+  { value: 'Europe/Kyiv', label: 'Europe/Kyiv (EET/EEST)' },
+  { value: 'Europe/Moscow', label: 'Europe/Moscow (MSK)' },
+  { value: 'Europe/Istanbul', label: 'Europe/Istanbul (TRT)' },
+  // Americas
+  { value: 'America/New_York', label: 'America/New_York (EST/EDT)' },
+  { value: 'America/Chicago', label: 'America/Chicago (CST/CDT)' },
+  { value: 'America/Denver', label: 'America/Denver (MST/MDT)' },
+  { value: 'America/Los_Angeles', label: 'America/Los_Angeles (PST/PDT)' },
+  { value: 'America/Anchorage', label: 'America/Anchorage (AKST/AKDT)' },
+  { value: 'Pacific/Honolulu', label: 'Pacific/Honolulu (HST)' },
+  { value: 'America/Toronto', label: 'America/Toronto (EST/EDT)' },
+  { value: 'America/Vancouver', label: 'America/Vancouver (PST/PDT)' },
+  { value: 'America/Mexico_City', label: 'America/Mexico_City (CST)' },
+  { value: 'America/Sao_Paulo', label: 'America/Sao_Paulo (BRT)' },
+  { value: 'America/Argentina/Buenos_Aires', label: 'America/Buenos_Aires (ART)' },
+  // Asia & Middle East
+  { value: 'Asia/Dubai', label: 'Asia/Dubai (GST)' },
+  { value: 'Asia/Kolkata', label: 'Asia/Kolkata (IST)' },
+  { value: 'Asia/Shanghai', label: 'Asia/Shanghai (CST)' },
+  { value: 'Asia/Tokyo', label: 'Asia/Tokyo (JST)' },
+  { value: 'Asia/Seoul', label: 'Asia/Seoul (KST)' },
+  { value: 'Asia/Singapore', label: 'Asia/Singapore (SGT)' },
+  { value: 'Asia/Hong_Kong', label: 'Asia/Hong_Kong (HKT)' },
+  { value: 'Asia/Bangkok', label: 'Asia/Bangkok (ICT)' },
+  { value: 'Asia/Jakarta', label: 'Asia/Jakarta (WIB)' },
+  { value: 'Asia/Tehran', label: 'Asia/Tehran (IRST/IRDT)' },
+  { value: 'Asia/Karachi', label: 'Asia/Karachi (PKT)' },
+  { value: 'Asia/Dhaka', label: 'Asia/Dhaka (BST)' },
+  // Africa
+  { value: 'Africa/Cairo', label: 'Africa/Cairo (EET/EEST)' },
+  { value: 'Africa/Johannesburg', label: 'Africa/Johannesburg (SAST)' },
+  { value: 'Africa/Lagos', label: 'Africa/Lagos (WAT)' },
+  { value: 'Africa/Nairobi', label: 'Africa/Nairobi (EAT)' },
+  // Oceania
+  { value: 'Australia/Sydney', label: 'Australia/Sydney (AEST/AEDT)' },
+  { value: 'Australia/Melbourne', label: 'Australia/Melbourne (AEST/AEDT)' },
+  { value: 'Australia/Perth', label: 'Australia/Perth (AWST)' },
+  { value: 'Australia/Adelaide', label: 'Australia/Adelaide (ACST/ACDT)' },
+  { value: 'Pacific/Auckland', label: 'Pacific/Auckland (NZST/NZDT)' },
+  // UTC
+  { value: 'UTC', label: 'UTC' },
+];
+
 export function SystemForm({
   title,
   initialName = '',
   initialDescription = '',
   initialRetentionDays = null,
   initialTzOffsetMinutes = null,
+  initialTzName = null,
   initialEventSource = 'postgresql',
   initialEsConnectionId = null,
   initialEsConfig = null,
@@ -86,6 +153,10 @@ export function SystemForm({
   const [tzOffset, setTzOffset] = useState<string>(
     initialTzOffsetMinutes !== null && initialTzOffsetMinutes !== undefined ? String(initialTzOffsetMinutes) : '',
   );
+  const [tzMode, setTzMode] = useState<'none' | 'iana' | 'offset'>(
+    initialTzName ? 'iana' : (initialTzOffsetMinutes !== null && initialTzOffsetMinutes !== undefined ? 'offset' : 'none'),
+  );
+  const [tzName, setTzName] = useState<string>(initialTzName ?? '');
   const [nameError, setNameError] = useState('');
   const nameRef = useRef<HTMLInputElement>(null);
   const mouseDownOnOverlay = useRef(false);
@@ -151,13 +222,22 @@ export function SystemForm({
       };
     }
 
-    const finalTzOffset: number | null = tzOffset !== '' ? Number(tzOffset) : null;
+    let finalTzOffset: number | null = null;
+    let finalTzName: string | null = null;
+    if (tzMode === 'iana' && tzName) {
+      finalTzName = tzName;
+      finalTzOffset = null;
+    } else if (tzMode === 'offset' && tzOffset !== '') {
+      finalTzOffset = Number(tzOffset);
+      if (!Number.isFinite(finalTzOffset)) finalTzOffset = null;
+    }
 
     onSave({
       name: trimmed,
       description: description.trim(),
       retention_days: finalRetention,
-      tz_offset_minutes: Number.isFinite(finalTzOffset) ? finalTzOffset : null,
+      tz_offset_minutes: finalTzOffset,
+      tz_name: finalTzName,
       event_source: eventSource,
       es_connection_id: eventSource === 'elasticsearch' ? esConnectionId : null,
       es_config: esConfig,
@@ -351,26 +431,58 @@ export function SystemForm({
             </span>
           </div>
 
-          {/* ── Timezone Offset ── */}
+          {/* ── Source Timezone ── */}
           <div className="form-group">
-            <label htmlFor="tz-offset">Source Timezone Offset</label>
-            <select
-              id="tz-offset"
-              className="form-input"
-              value={tzOffset}
-              onChange={(e) => setTzOffset(e.target.value)}
-              style={{ maxWidth: '320px' }}
-            >
-              {TZ_OFFSETS.map((tz) => (
-                <option key={tz.value} value={tz.value}>
-                  {tz.label}
-                </option>
-              ))}
-            </select>
+            <label>Source Timezone Correction</label>
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginTop: '4px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer', fontSize: '0.88rem' }}>
+                <input type="radio" name="tz-mode" checked={tzMode === 'none'} onChange={() => setTzMode('none')} />
+                None
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer', fontSize: '0.88rem' }}>
+                <input type="radio" name="tz-mode" checked={tzMode === 'iana'} onChange={() => setTzMode('iana')} />
+                Timezone (DST-aware)
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer', fontSize: '0.88rem' }}>
+                <input type="radio" name="tz-mode" checked={tzMode === 'offset'} onChange={() => setTzMode('offset')} />
+                Fixed UTC offset
+              </label>
+            </div>
+
+            {tzMode === 'iana' && (
+              <select
+                id="tz-name"
+                className="form-input"
+                value={tzName}
+                onChange={(e) => setTzName(e.target.value)}
+                style={{ maxWidth: '360px', marginTop: '8px' }}
+              >
+                {IANA_TIMEZONES.map((tz) => (
+                  <option key={tz.value} value={tz.value}>{tz.label}</option>
+                ))}
+              </select>
+            )}
+
+            {tzMode === 'offset' && (
+              <select
+                id="tz-offset"
+                className="form-input"
+                value={tzOffset}
+                onChange={(e) => setTzOffset(e.target.value)}
+                style={{ maxWidth: '320px', marginTop: '8px' }}
+              >
+                {TZ_OFFSETS.map((tz) => (
+                  <option key={tz.value} value={tz.value}>{tz.label}</option>
+                ))}
+              </select>
+            )}
+
             <span className="field-hint" style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '4px', display: 'block' }}>
-              Corrects RFC 3164 syslog timestamps that have no timezone info.
-              Set this to the difference between the source&apos;s timezone and the Fluent Bit
-              container&apos;s timezone. Leave &quot;None&quot; if both are the same.
+              {tzMode === 'none'
+                ? 'No timezone correction. Use when source timestamps already include timezone info (RFC 5424, ISO 8601).'
+                : tzMode === 'iana'
+                ? 'Select the source device\'s timezone. Automatically handles DST (summer/winter time) transitions.'
+                : 'Fixed offset for sources without DST. Does NOT adjust for summer/winter time changes.'}
             </span>
           </div>
 

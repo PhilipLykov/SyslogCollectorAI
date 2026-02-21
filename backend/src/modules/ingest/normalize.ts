@@ -290,6 +290,73 @@ export function applyTimezoneOffset(isoTimestamp: string, offsetMinutes: number)
 }
 
 /**
+ * Convert an RFC 3164 timestamp to UTC using a proper IANA timezone name.
+ * 
+ * Unlike `applyTimezoneOffset` (fixed offset), this handles DST transitions
+ * correctly by computing the actual UTC offset at the event's local time.
+ *
+ * @param isoTimestamp  ISO 8601 string as parsed by Fluent Bit (in Fluent Bit's TZ)
+ * @param tzName        IANA timezone identifier (e.g. "Europe/Chisinau", "America/New_York")
+ * @param fluentBitTz   IANA timezone of the Fluent Bit container (default: "UTC")
+ * @returns Corrected ISO 8601 string in UTC, or original if conversion fails.
+ */
+export function applyTimezoneByName(
+  isoTimestamp: string,
+  tzName: string,
+  fluentBitTz: string = 'UTC',
+): string {
+  try {
+    const d = new Date(isoTimestamp);
+    if (isNaN(d.getTime())) return isoTimestamp;
+
+    // Get the UTC offset (in minutes) for both the source TZ and Fluent Bit TZ
+    // at the specific moment of the event.
+    const sourceOffsetMin = getUtcOffsetMinutes(d, tzName);
+    const fbOffsetMin = getUtcOffsetMinutes(d, fluentBitTz);
+
+    if (sourceOffsetMin === null || fbOffsetMin === null) return isoTimestamp;
+
+    // Fluent Bit interpreted the timestamp in its own TZ.
+    // The real local time was in the source's TZ.
+    // Correction = (source offset - FB offset) in minutes.
+    const deltaMinutes = sourceOffsetMin - fbOffsetMin;
+    if (deltaMinutes === 0) return isoTimestamp;
+
+    d.setTime(d.getTime() - deltaMinutes * 60_000);
+    return d.toISOString();
+  } catch {
+    return isoTimestamp;
+  }
+}
+
+/**
+ * Compute the UTC offset in minutes for a given IANA timezone at a specific instant.
+ * Positive = ahead of UTC (e.g., +120 for EET, +180 for EEST).
+ * Returns null if the timezone name is invalid.
+ */
+function getUtcOffsetMinutes(date: Date, tzName: string): number | null {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: tzName,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).formatToParts(date);
+
+    const get = (type: string) => parseInt(parts.find(p => p.type === type)?.value ?? '0', 10);
+    const localDate = new Date(Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second')));
+
+    return Math.round((localDate.getTime() - date.getTime()) / 60_000);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Clamp a future timestamp to the current time if it exceeds the allowed drift.
  *
  * Prevents events with impossible future timestamps (from clock skew,

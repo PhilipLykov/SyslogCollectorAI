@@ -386,6 +386,7 @@ export interface MonitoredSystem {
   description: string;
   retention_days: number | null;
   tz_offset_minutes?: number | null;
+  tz_name?: string | null;
   event_source?: 'postgresql' | 'elasticsearch';
   es_config?: Record<string, unknown> | null;
   es_connection_id?: string | null;
@@ -559,6 +560,7 @@ export async function createSystem(data: {
   description?: string;
   retention_days?: number | null;
   tz_offset_minutes?: number | null;
+  tz_name?: string | null;
   event_source?: string;
   es_connection_id?: string | null;
   es_config?: Record<string, unknown> | null;
@@ -576,6 +578,7 @@ export async function updateSystem(
     description?: string;
     retention_days?: number | null;
     tz_offset_minutes?: number | null;
+    tz_name?: string | null;
     event_source?: string;
     es_connection_id?: string | null;
     es_config?: Record<string, unknown> | null;

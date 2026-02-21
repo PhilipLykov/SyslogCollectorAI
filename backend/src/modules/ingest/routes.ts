@@ -4,7 +4,7 @@ import { getDb } from '../../db/index.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { PERMISSIONS } from '../../middleware/permissions.js';
 import { localTimestamp } from '../../config/index.js';
-import { normalizeEntry, computeNormalizedHash, flattenECS, cleanTransportAddress, applyTimezoneOffset, clampFutureTimestamp } from './normalize.js';
+import { normalizeEntry, computeNormalizedHash, flattenECS, cleanTransportAddress, applyTimezoneOffset, applyTimezoneByName, clampFutureTimestamp } from './normalize.js';
 import { redactEvent } from './redact.js';
 import { matchSource } from './sourceMatch.js';
 import { reassembleMultilineEntries } from './multiline.js';
@@ -108,14 +108,19 @@ export async function registerIngestRoutes(app: FastifyInstance): Promise<void> 
         ? pipelineCfg.max_event_message_length
         : 8192;
 
-      // Pre-load per-system timezone offsets (one lightweight query per batch)
+      // Pre-load per-system timezone settings (one lightweight query per batch)
       const tzOffsetMap = new Map<string, number>();
+      const tzNameMap = new Map<string, string>();
       try {
         const systems = await db('monitored_systems')
-          .whereNotNull('tz_offset_minutes')
-          .select('id', 'tz_offset_minutes');
+          .where(function() {
+            this.whereNotNull('tz_offset_minutes').orWhereNotNull('tz_name');
+          })
+          .select('id', 'tz_offset_minutes', 'tz_name');
         for (const sys of systems) {
-          if (typeof sys.tz_offset_minutes === 'number' && sys.tz_offset_minutes !== 0) {
+          if (sys.tz_name && typeof sys.tz_name === 'string') {
+            tzNameMap.set(sys.id, sys.tz_name);
+          } else if (typeof sys.tz_offset_minutes === 'number' && sys.tz_offset_minutes !== 0) {
             tzOffsetMap.set(sys.id, sys.tz_offset_minutes);
           }
         }
@@ -197,10 +202,15 @@ export async function registerIngestRoutes(app: FastifyInstance): Promise<void> 
           continue;
         }
 
-        // 2b. Apply per-system timezone offset (corrects RFC 3164 TZ mismatch)
-        const tzOffset = tzOffsetMap.get(match.system_id);
-        if (tzOffset) {
-          normalized.timestamp = applyTimezoneOffset(normalized.timestamp, tzOffset);
+        // 2b. Apply per-system timezone correction (corrects RFC 3164 TZ mismatch)
+        const tzName = tzNameMap.get(match.system_id);
+        if (tzName) {
+          normalized.timestamp = applyTimezoneByName(normalized.timestamp, tzName);
+        } else {
+          const tzOffset = tzOffsetMap.get(match.system_id);
+          if (tzOffset) {
+            normalized.timestamp = applyTimezoneOffset(normalized.timestamp, tzOffset);
+          }
         }
 
         // 2c. Future-timestamp guard: clamp to now if too far ahead

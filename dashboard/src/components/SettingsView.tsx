@@ -130,6 +130,7 @@ export function SettingsView({ onAuthError, currentUser }: SettingsViewProps) {
         description: data.description,
         retention_days: data.retention_days,
         tz_offset_minutes: data.tz_offset_minutes,
+        tz_name: data.tz_name,
         event_source: data.event_source,
         es_connection_id: data.es_connection_id,
         es_config: data.es_config,
@@ -154,6 +155,7 @@ export function SettingsView({ onAuthError, currentUser }: SettingsViewProps) {
         description: data.description,
         retention_days: data.retention_days,
         tz_offset_minutes: data.tz_offset_minutes,
+        tz_name: data.tz_name,
         event_source: data.event_source,
         es_connection_id: data.es_connection_id,
         es_config: data.es_config,
@@ -596,6 +598,7 @@ export function SettingsView({ onAuthError, currentUser }: SettingsViewProps) {
           {modal?.kind === 'create-system' && (
             <SystemForm
               title="Create Monitored System"
+              initialTzName={null}
               onSave={(data) => handleCreateSystem(data)}
               onCancel={() => setModal(null)}
               saving={saving}
@@ -609,6 +612,7 @@ export function SettingsView({ onAuthError, currentUser }: SettingsViewProps) {
               initialDescription={modal.system.description}
               initialRetentionDays={modal.system.retention_days}
               initialTzOffsetMinutes={modal.system.tz_offset_minutes ?? null}
+              initialTzName={modal.system.tz_name ?? null}
               initialEventSource={modal.system.event_source ?? 'postgresql'}
               initialEsConnectionId={modal.system.es_connection_id ?? null}
               initialEsConfig={modal.system.es_config ?? null}

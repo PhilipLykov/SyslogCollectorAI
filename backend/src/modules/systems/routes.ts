@@ -41,7 +41,7 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
     '/api/v1/systems',
     { preHandler: requireAuth(PERMISSIONS.SYSTEMS_MANAGE) },
     async (request, reply) => {
-      const { name, description, retention_days, event_source, es_connection_id, es_config, tz_offset_minutes } = request.body ?? {} as any;
+      const { name, description, retention_days, event_source, es_connection_id, es_config, tz_offset_minutes, tz_name } = request.body ?? {} as any;
 
       if (!name || typeof name !== 'string' || name.trim().length === 0) {
         return reply.code(400).send({ error: '"name" is required and must be a non-empty string.' });
@@ -80,6 +80,17 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
         tzOffsetValue = tz;
       }
 
+      // Validate tz_name if provided
+      let tzNameValue: string | null = null;
+      if (tz_name !== undefined && tz_name !== null && tz_name !== '') {
+        try {
+          Intl.DateTimeFormat('en-US', { timeZone: String(tz_name) });
+          tzNameValue = String(tz_name);
+        } catch {
+          return reply.code(400).send({ error: `"tz_name" is not a valid IANA timezone identifier (e.g. "Europe/Chisinau").` });
+        }
+      }
+
       await db('monitored_systems').insert({
         id,
         name: name.trim(),
@@ -89,6 +100,7 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
         es_connection_id: effectiveSource === 'elasticsearch' ? (es_connection_id ?? null) : null,
         es_config: es_config ? JSON.stringify(es_config) : null,
         tz_offset_minutes: tzOffsetValue,
+        tz_name: tzNameValue,
         created_at: now,
         updated_at: now,
       });
@@ -119,7 +131,7 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
       const existing = await db('monitored_systems').where({ id }).first();
       if (!existing) return reply.code(404).send({ error: 'System not found' });
 
-      const { name, description, retention_days, event_source, es_connection_id, es_config, tz_offset_minutes } = request.body ?? {} as any;
+      const { name, description, retention_days, event_source, es_connection_id, es_config, tz_offset_minutes, tz_name } = request.body ?? {} as any;
       const updates: Record<string, any> = { updated_at: new Date().toISOString() };
 
       if (name !== undefined) {
@@ -151,6 +163,18 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
             return reply.code(400).send({ error: '"tz_offset_minutes" must be between -1440 and 1440 (or null).' });
           }
           updates.tz_offset_minutes = tz;
+        }
+      }
+      if (tz_name !== undefined) {
+        if (tz_name === null || tz_name === '') {
+          updates.tz_name = null;
+        } else {
+          try {
+            Intl.DateTimeFormat('en-US', { timeZone: String(tz_name) });
+            updates.tz_name = String(tz_name);
+          } catch {
+            return reply.code(400).send({ error: `"tz_name" is not a valid IANA timezone identifier.` });
+          }
         }
       }
 
