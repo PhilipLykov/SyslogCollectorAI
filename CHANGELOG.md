@@ -5,6 +5,41 @@ All notable changes to LogSentinel AI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.8-beta] - 2026-02-22
+
+### Added
+- **System Auto-Discovery**: Automatically detects new log sources from unmatched incoming events and suggests new monitored systems
+  - Unmatched events are buffered in a `discovery_buffer` staging table during ingestion
+  - A grouping engine (runs within the pipeline cycle) aggregates buffered events by host, source IP, and optionally program into `discovery_suggestions`
+  - Dashboard banner notifies users when new sources are detected, linking directly to the Discovery settings tab
+  - Discovery panel in Settings provides a full management UI: accept (creates system + log source), merge into existing system, dismiss (24h / 7d / forever)
+  - Smart naming: generates user-friendly system names from host/IP/program patterns
+  - Noise filtering: configurable `ignore_patterns` (regex), minimum event threshold, minimum rate per hour
+  - Existing system affinity detection prevents duplicate suggestions when a log source already covers the pattern
+  - Fully configurable via UI: enable/disable globally, toggle group-by-host / group-by-IP / split-by-program, set buffer TTL, auto-accept mode
+  - Transactional accept/merge with status guards prevent duplicate processing
+- **DST-Aware Timezone Support (IANA)**: Monitored systems can now specify an IANA timezone name (e.g., `Europe/Chisinau`) instead of a fixed UTC offset
+  - Automatically computes the correct UTC offset at each event's timestamp, including DST transitions
+  - Three-mode timezone picker in the system form: None / Timezone (DST-aware) / Fixed UTC offset
+  - Backward-compatible: `tz_name` takes priority over `tz_offset_minutes` when both are set
+  - Validation uses `Intl.DateTimeFormat` to reject invalid timezone names
+- **Enhanced AI Finding Deduplication**: Two-layer approach to prevent duplicate findings
+  - Text normalization now strips LLM event references (`(events [1], [2])`, `[N]`) and all isolated numbers before computing similarity
+  - New "DUPLICATE PREVENTION" section in the LLM meta-analysis system prompt explicitly instructs the model to compare against existing open findings and avoid creating duplicates when the root cause is the same
+
+### Changed
+- **Discovery Buffer in Ingest Pipeline**: Unmatched events are now buffered (fire-and-forget) for auto-discovery instead of being silently discarded. Discovery can be disabled in settings
+- **Grouping Engine in Pipeline Orchestrator**: The discovery grouping engine runs as a non-critical step after alert evaluation in each pipeline cycle, respecting the enabled flag
+- **Finding Dedup Cleanup**: Removed unused `criterionFilter` parameter from `TfIdfSimilarity.bestMatch()`, removed redundant case-insensitive regex flags after `.toLowerCase()`
+
+### Fixed
+- **CRITICAL: Discovery Routes Compilation Error**: `PERMISSIONS.SETTINGS_VIEW` and `PERMISSIONS.SETTINGS_MANAGE` constants did not exist in the permissions module, preventing TypeScript compilation. Changed to `PERMISSIONS.SYSTEMS_VIEW` / `PERMISSIONS.SYSTEMS_MANAGE`
+- **Discovery Accept Hash Mismatch**: `computeNormalizedHash` in event replay was missing `facility` and `service` fields, producing different hashes than normal ingestion and defeating deduplication
+- **Discovery Accept/Merge Race Condition**: Accept and merge endpoints now use `db.transaction()` to prevent concurrent requests from creating duplicate systems or log sources
+- **Discovery Wildcard Fallback**: Removed unsafe wildcard fallback `{ host: '.*' }` that could match all events if a suggestion had no identifying patterns. Now returns 400 error instead
+- **Discovery Double-Processing Guard**: Accept, merge, and dismiss endpoints now check `status !== 'pending'` and return 409 Conflict if already processed
+- **Discovery Panel Error Handling**: Standardized error extraction to `instanceof Error` pattern, added `setError('')` clearing before action handlers, fixed silent error swallowing in `loadSuggestions`
+
 ## [0.8.7-beta] - 2026-02-20
 
 ### Added

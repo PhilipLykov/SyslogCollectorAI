@@ -1896,3 +1896,87 @@ export async function deleteNormalBehaviorTemplate(id: string): Promise<void> {
     method: 'DELETE',
   });
 }
+
+// ── Discovery ─────────────────────────────────────────────────
+
+export interface DiscoveryConfig {
+  enabled: boolean;
+  group_by_host: boolean;
+  group_by_ip: boolean;
+  split_by_program: boolean;
+  min_events_threshold: number;
+  min_rate_per_hour: number;
+  buffer_ttl_hours: number;
+  auto_accept: boolean;
+  ignore_patterns: string[];
+}
+
+export interface DiscoverySuggestion {
+  id: string;
+  group_key: string;
+  suggested_name: string;
+  host_pattern: string | null;
+  ip_pattern: string | null;
+  program_patterns: string[];
+  sample_messages: string[];
+  event_count: number;
+  first_seen_at: string;
+  last_seen_at: string;
+  status: 'pending' | 'accepted' | 'dismissed' | 'merged';
+  dismissed_until: string | null;
+  merge_target_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function fetchDiscoveryConfig(): Promise<DiscoveryConfig> {
+  return apiFetch('/api/v1/discovery/config');
+}
+
+export async function updateDiscoveryConfig(config: Partial<DiscoveryConfig>): Promise<DiscoveryConfig> {
+  return apiFetch('/api/v1/discovery/config', {
+    method: 'PUT',
+    body: JSON.stringify(config),
+  });
+}
+
+export async function fetchDiscoverySuggestions(status?: string): Promise<DiscoverySuggestion[]> {
+  const params = new URLSearchParams();
+  if (status) params.set('status', status);
+  const qs = params.toString();
+  return apiFetch(`/api/v1/discovery/suggestions${qs ? '?' + qs : ''}`);
+}
+
+export async function fetchDiscoverySuggestionCount(): Promise<{ count: number }> {
+  return apiFetch('/api/v1/discovery/suggestions/count');
+}
+
+export async function acceptDiscoverySuggestion(
+  id: string,
+  opts?: { name?: string; replay_events?: boolean },
+): Promise<{ system_id: string; name: string }> {
+  return apiFetch(`/api/v1/discovery/suggestions/${id}/accept`, {
+    method: 'POST',
+    body: JSON.stringify(opts ?? {}),
+  });
+}
+
+export async function mergeDiscoverySuggestion(
+  id: string,
+  systemId: string,
+): Promise<{ system_id: string; name: string }> {
+  return apiFetch(`/api/v1/discovery/suggestions/${id}/merge`, {
+    method: 'POST',
+    body: JSON.stringify({ system_id: systemId }),
+  });
+}
+
+export async function dismissDiscoverySuggestion(
+  id: string,
+  duration?: '24h' | '7d' | 'forever',
+): Promise<{ ok: boolean }> {
+  return apiFetch(`/api/v1/discovery/suggestions/${id}/dismiss`, {
+    method: 'POST',
+    body: JSON.stringify({ duration: duration ?? 'forever' }),
+  });
+}

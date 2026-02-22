@@ -128,6 +128,23 @@ export async function registerIngestRoutes(app: FastifyInstance): Promise<void> 
         // Non-critical — proceed without timezone correction
       }
 
+      // ── Discovery buffer for unmatched events ────────────────
+      let discoveryEnabled = false;
+      try {
+        const discRow = await db('app_config').where({ key: 'discovery_config' }).first('value');
+        if (discRow) {
+          const discCfg = typeof discRow.value === 'string' ? JSON.parse(discRow.value) : discRow.value;
+          discoveryEnabled = discCfg?.enabled !== false;
+        } else {
+          discoveryEnabled = true; // default: enabled
+        }
+      } catch { /* non-critical */ }
+      const discoveryRows: Array<{
+        host: string | null; source_ip: string | null; program: string | null;
+        facility: string | null; severity: string | null;
+        message_sample: string; received_at: string;
+      }> = [];
+
       let accepted = 0;
       let rejected = 0;
       let futureClamped = 0;
@@ -199,6 +216,20 @@ export async function registerIngestRoutes(app: FastifyInstance): Promise<void> 
         if (!match) {
           rejected++;
           errors.push(`Entry ${i}: no matching log source found.`);
+
+          // Buffer unmatched event for auto-discovery (non-blocking)
+          if (discoveryEnabled) {
+            discoveryRows.push({
+              host: normalized.host || null,
+              source_ip: normalized.source_ip || null,
+              program: normalized.program || null,
+              facility: normalized.facility || null,
+              severity: normalized.severity || null,
+              message_sample: (normalized.message || '').slice(0, 512),
+              received_at: normalized.timestamp || new Date().toISOString(),
+            });
+          }
+
           continue;
         }
 
@@ -276,6 +307,15 @@ export async function registerIngestRoutes(app: FastifyInstance): Promise<void> 
           app.log.error(`[${localTimestamp()}] Ingest batch insert failed: ${err}`);
           return reply.code(500).send({ error: 'Failed to persist events.' });
         }
+      }
+
+      // Flush discovery buffer (non-blocking, fire-and-forget)
+      if (discoveryRows.length > 0) {
+        db('discovery_buffer')
+          .insert(discoveryRows)
+          .catch((err: any) => {
+            app.log.debug(`[${localTimestamp()}] Discovery buffer insert failed: ${err.message}`);
+          });
       }
 
       app.log.debug(

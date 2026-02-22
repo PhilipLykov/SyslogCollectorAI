@@ -383,6 +383,16 @@ IMPORTANT RULES:
 - Be specific and actionable. Reference event patterns, hosts, programs, or error messages where relevant.
 - Use the finding metadata (age, occurrence count) to make informed decisions about trends and persistence.
 
+DUPLICATE PREVENTION — READ THIS CAREFULLY:
+Before writing ANY new finding, compare it against EVERY open finding listed above.
+Two findings describe the SAME issue if they share the same root cause, even if:
+  - They reference different event numbers ([1], [42], etc.)
+  - They use different wording or sentence structure
+  - They mention different timestamps, container IDs, or host names
+  - One finding lists specific events while the other is a general statement
+If an open finding already covers the same root cause, do NOT create a new finding.
+Instead, add its index to still_active_indices to confirm it is still occurring.
+
 Return ONLY valid JSON.`;
 
 export const DEFAULT_RAG_SYSTEM_PROMPT = `You are a senior IT operations assistant for LogSentinel AI. Your users are professional engineers who manage many systems. Answer concisely and precisely.

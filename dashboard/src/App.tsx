@@ -3,6 +3,7 @@ import {
   type DashboardSystem,
   type CurrentUser,
   fetchDashboardSystems,
+  fetchDiscoverySuggestionCount,
   getStoredUser,
   setStoredUser,
   getStoredApiKey,
@@ -39,6 +40,8 @@ export default function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
+  const [discoveryCount, setDiscoveryCount] = useState(0);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<string | undefined>(undefined);
   const fetchId = useRef(0);
 
   // Validate session and load user info on app load
@@ -72,9 +75,13 @@ export default function App() {
     setError('');
 
     try {
-      const data = await fetchDashboardSystems();
+      const [data, discCount] = await Promise.all([
+        fetchDashboardSystems(),
+        fetchDiscoverySuggestionCount().catch(() => ({ count: 0 })),
+      ]);
       if (id !== fetchId.current) return;
       setSystems(data);
+      setDiscoveryCount(discCount.count);
       setLastRefreshed(new Date());
       setSelectedSystem((prev) => {
         if (!prev) return null;
@@ -161,7 +168,7 @@ export default function App() {
         <div className="header-left">
           <h1>
             <span>Log</span>Sentinel AI
-            <span className="version-tag">v0.8.7-beta</span>
+            <span className="version-tag">v0.8.8-beta</span>
           </h1>
           <nav className="header-nav" role="tablist" aria-label="Main navigation">
             <button
@@ -239,7 +246,7 @@ export default function App() {
       ) : view === 'ai-usage' ? (
         <LlmUsageView onAuthError={handleLogout} />
       ) : view === 'settings' ? (
-        <SettingsView onAuthError={handleLogout} currentUser={currentUser} />
+        <SettingsView onAuthError={handleLogout} currentUser={currentUser} initialTab={settingsInitialTab} onTabConsumed={() => setSettingsInitialTab(undefined)} />
       ) : selectedSystem ? (
         <DrillDown
           system={selectedSystem}
@@ -267,6 +274,17 @@ export default function App() {
                 </button>{' '}
                 to create your first monitored system and log source.
               </p>
+            </div>
+          )}
+
+          {discoveryCount > 0 && (
+            <div className="discovery-banner" role="status">
+              <span>
+                <strong>{discoveryCount}</strong> new log source{discoveryCount !== 1 ? 's' : ''} detected
+              </span>
+              <button className="btn btn-sm" onClick={() => { setSettingsInitialTab('discovery'); setView('settings'); }}>
+                Review Suggestions
+              </button>
             </div>
           )}
 

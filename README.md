@@ -11,7 +11,7 @@ LogSentinel AI transforms raw log streams into actionable security and operation
 ### AI-Powered Analysis
 
 - **6-Criteria Event Scoring** — Every ingested event is evaluated by an LLM across IT Security, Performance Degradation, Failure Prediction, Anomaly Detection, Compliance/Audit, and Operational Risk. Each criterion uses a dedicated, tunable system prompt so domain experts can calibrate the AI's judgment without touching code.
-- **Meta-Analysis with Findings** — A sliding-window pipeline aggregates per-event scores into holistic assessments, producing structured findings with full lifecycle management: automatic deduplication (TF-IDF + Jaccard similarity), severity decay, and auto-resolution when issues no longer recur.
+- **Meta-Analysis with Findings** — A sliding-window pipeline aggregates per-event scores into holistic assessments, producing structured findings with full lifecycle management: automatic deduplication (TF-IDF + Jaccard similarity + LLM-level duplicate prevention), severity decay, and auto-resolution when issues no longer recur.
 - **Content-Based Severity Enrichment** — Syslog header severity is often inaccurate (e.g., Docker logs everything as "info"). The platform scans message bodies for error/warning indicators and upgrades severity automatically, so events like `error: permission denied` are correctly classified.
 - **RAG "Ask AI"** — Natural language interface to query your entire event history. Ask questions like *"Were there any failed SSH logins last night?"* or *"Summarize the Docker container issues from the past week"* with persistent chat history.
 - **Token Optimization** — Intelligent deduplication via template extraction, score caching, severity pre-filtering, and configurable batch sizing reduce LLM costs by up to 80% without sacrificing analysis quality. Real-time usage tracking with per-model cost estimation keeps spending visible.
@@ -51,6 +51,8 @@ LogSentinel AI transforms raw log streams into actionable security and operation
 ### Enterprise-Grade Features
 
 - **Multi-System Monitoring** — Monitor unlimited systems from a single deployment. Each system has independent log source selectors (regex-based field matching with priority ordering), retention policies, and AI analysis pipelines.
+- **Automatic System Discovery** — Unmatched incoming events are automatically buffered and grouped by host, source IP, and program. The system detects new log sources, generates smart names, filters noise with configurable thresholds and regex ignore patterns, checks for existing system affinity, and presents suggestions in a dashboard banner. Users can accept (creates a new system + log source), merge into an existing system, or dismiss suggestions — all from the UI. Fully configurable: group-by toggles, minimum event threshold, rate filters, buffer TTL, and auto-accept mode.
+- **DST-Aware Timezone Support** — Each monitored system can specify an IANA timezone (e.g., `Europe/Berlin`) for automatic DST-aware timestamp correction. The system computes the correct UTC offset at each event's timestamp, handling summer/winter time transitions automatically. Three-mode picker: None, IANA Timezone (DST-aware), or Fixed UTC offset.
 - **Flexible Log Source Matching with OR Groups** — Regex-based selectors match incoming events to systems by any combination of fields (host, source_ip, service, program, facility). Multiple AND-condition groups can be combined with OR logic, enabling complex routing like "match (host=web-01 AND program=nginx) OR (host=web-02 AND program=nginx)". Priority ordering ensures specific rules take precedence over catch-all rules.
 - **Comprehensive Alerting** — Five notification channels (Webhook, Pushover, NTfy, Gotify, Telegram) with configurable rules, severity thresholds, silence windows, throttle intervals, and recovery alerts. Secrets referenced via environment variables — never stored in the database.
 - **Compliance Export** — One-click export of events, scores, and findings in CSV or JSON format for regulatory compliance and external auditing.
@@ -78,6 +80,7 @@ LogSentinel AI transforms raw log streams into actionable security and operation
                    │             Ingest API (HTTP)               │
                    │  ECS Flatten → Normalize → Severity Enrich  │
                    │  → Source Match → Privacy Redact → Persist  │
+                   │  (unmatched → Discovery Buffer)             │
                    └────────┬────────────────────────────────────┘
                             │
          ┌──────────────────▼───────────────────────────────┐
@@ -89,6 +92,7 @@ LogSentinel AI transforms raw log streams into actionable security and operation
          │  AI Pipeline                                      │
          │  Dedup → Per-Event Scoring → Windowing            │
          │  → Meta-Analysis → Finding Dedup (TF-IDF)        │
+         │  → Discovery Grouping Engine                      │
          └────────────────────┬─────────────────────────────┘
                               │
          ┌────────────────────▼─────────────────────────────┐
@@ -192,6 +196,7 @@ All endpoints require authentication via `Authorization: Bearer <session_token>`
 | **RAG** | `POST /api/v1/ask` | Natural language event queries |
 | **AI Config** | `GET/PUT /api/v1/ai-config`, `/ai-prompts` | Model and prompt configuration |
 | **Alerting** | `GET/POST/PUT/DELETE /api/v1/notification-channels`, `/notification-rules`, `/silences` | Notification management |
+| **Discovery** | `GET/PUT /api/v1/discovery/config`, `GET /api/v1/discovery/suggestions`, `/count`, `POST /:id/accept`, `/:id/merge`, `/:id/dismiss` | Auto-discovery configuration and suggestion management |
 | **Elasticsearch** | `GET/POST/PUT/DELETE /api/v1/elasticsearch/connections`, `/test`, `/:id/indices`, `/:id/mapping`, `/:id/preview` | ES connection CRUD, test, index browser |
 | **Database Info** | `GET /api/v1/database/info` | PostgreSQL + Elasticsearch status overview |
 | **Maintenance** | `GET/PUT /api/v1/maintenance-config`, `/backup/*` | DB maintenance and backup |

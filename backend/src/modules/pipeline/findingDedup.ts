@@ -107,16 +107,22 @@ export function normalizeFindingText(text: string): string {
   let t = text.toLowerCase();
 
   // Replace UUIDs: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-  t = t.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '<ID>');
+  t = t.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, '<ID>');
 
   // Replace long hex strings (container IDs, SHA hashes) — 12+ hex chars
-  t = t.replace(/\b[0-9a-f]{12,}\b/gi, '<ID>');
+  t = t.replace(/\b[0-9a-f]{12,}\b/g, '<ID>');
 
   // Replace IP addresses (v4)
   t = t.replace(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?\b/g, '<IP>');
 
-  // Replace numbers that look like counts or timestamps (isolated numbers 4+ digits)
-  t = t.replace(/\b\d{4,}\b/g, '<NUM>');
+  // Remove LLM event references: "(events [1], [2], [3]...)" or "(event [5])"
+  t = t.replace(/\(events?\s*\[[\d\],\s\[]*\]\s*\)/g, '');
+
+  // Remove standalone [N] references (e.g. "[1]", "[42]", "[377]")
+  t = t.replace(/\[\d+\]/g, '');
+
+  // Replace ALL isolated numbers (event refs, counts, timestamps)
+  t = t.replace(/\b\d+\b/g, '<NUM>');
 
   // Remove punctuation except hyphens, underscores, angle brackets (for our placeholders)
   t = t.replace(/[^\w\s\-<>]/g, ' ');
@@ -242,7 +248,7 @@ export class TfIdfSimilarity {
    * Find the best matching corpus document for a query text.
    * Returns { index, similarity } or null if no match above minSimilarity.
    */
-  bestMatch(queryText: string, minSimilarity: number, criterionFilter?: string | null): {
+  bestMatch(queryText: string, minSimilarity: number): {
     index: number;
     similarity: number;
   } | null {

@@ -26,14 +26,20 @@ import { RoleManagementSection } from './RoleManagementSection';
 import { ElasticsearchSettings } from './ElasticsearchSettings';
 import { NormalBehaviorPanel } from './NormalBehaviorPanel';
 import { DashboardConfigSection } from './DashboardConfigSection';
+import { DiscoveryPanel } from './DiscoveryPanel';
 import { hasPermission } from '../App';
 
 interface SettingsViewProps {
   onAuthError: () => void;
   currentUser?: CurrentUser | null;
+  initialTab?: string;
+  onTabConsumed?: () => void;
 }
 
-type SettingsTab = 'systems' | 'ai-model' | 'dashboard' | 'notifications' | 'normal-behavior' | 'database' | 'elasticsearch' | 'privacy' | 'users' | 'roles' | 'api-keys' | 'audit-log';
+type SettingsTab = 'systems' | 'ai-model' | 'dashboard' | 'notifications' | 'normal-behavior' | 'discovery' | 'database' | 'elasticsearch' | 'privacy' | 'users' | 'roles' | 'api-keys' | 'audit-log';
+
+const VALID_TABS: ReadonlySet<string> = new Set<SettingsTab>(['systems', 'ai-model', 'dashboard', 'notifications', 'normal-behavior', 'discovery', 'database', 'elasticsearch', 'privacy', 'users', 'roles', 'api-keys', 'audit-log']);
+function isValidTab(t: string): t is SettingsTab { return VALID_TABS.has(t); }
 
 type Modal =
   | { kind: 'create-system' }
@@ -59,8 +65,10 @@ function getDefaultTab(user: CurrentUser | null | undefined): SettingsTab {
   return 'systems'; // fallback
 }
 
-export function SettingsView({ onAuthError, currentUser }: SettingsViewProps) {
-  const [activeTab, setActiveTab] = useState<SettingsTab>(() => getDefaultTab(currentUser));
+export function SettingsView({ onAuthError, currentUser, initialTab, onTabConsumed }: SettingsViewProps) {
+  const [activeTab, setActiveTab] = useState<SettingsTab>(() =>
+    initialTab && isValidTab(initialTab) ? initialTab as SettingsTab : getDefaultTab(currentUser),
+  );
   const [systems, setSystems] = useState<MonitoredSystem[]>([]);
   const [selectedSystemId, setSelectedSystemId] = useState<string | null>(null);
   const [sources, setSources] = useState<LogSource[]>([]);
@@ -71,6 +79,14 @@ export function SettingsView({ onAuthError, currentUser }: SettingsViewProps) {
   const [saving, setSaving] = useState(false);
 
   const selectedSystem = systems.find((s) => s.id === selectedSystemId) ?? null;
+
+  // Navigate to requested tab when initialTab prop changes
+  useEffect(() => {
+    if (initialTab && isValidTab(initialTab)) {
+      setActiveTab(initialTab as SettingsTab);
+      onTabConsumed?.();
+    }
+  }, [initialTab, onTabConsumed]);
 
   // ── Load systems ────────────────────────────────────────────
   const loadSystems = useCallback(async () => {
@@ -330,6 +346,16 @@ export function SettingsView({ onAuthError, currentUser }: SettingsViewProps) {
             Normal Behavior
           </button>
         )}
+        {hasPermission(currentUser ?? null, 'systems:view') && (
+          <button
+            className={`settings-tab${activeTab === 'discovery' ? ' active' : ''}`}
+            onClick={() => setActiveTab('discovery')}
+            role="tab"
+            aria-selected={activeTab === 'discovery'}
+          >
+            Discovery
+          </button>
+        )}
         {hasPermission(currentUser ?? null, 'users:manage') && (
           <button
             className={`settings-tab${activeTab === 'users' ? ' active' : ''}`}
@@ -387,6 +413,8 @@ export function SettingsView({ onAuthError, currentUser }: SettingsViewProps) {
         <PrivacySection onAuthError={onAuthError} />
       ) : activeTab === 'normal-behavior' ? (
         <NormalBehaviorPanel onAuthError={onAuthError} />
+      ) : activeTab === 'discovery' ? (
+        <DiscoveryPanel onAuthError={onAuthError} />
       ) : activeTab === 'users' ? (
         <UserManagementSection onAuthError={onAuthError} currentUser={currentUser} />
       ) : activeTab === 'roles' ? (

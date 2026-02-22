@@ -8,6 +8,7 @@ import { runPerEventScoringJob } from './scoringJob.js';
 import { createWindows } from './windowing.js';
 import { metaAnalyzeWindow } from './metaAnalyze.js';
 import { evaluateAlerts } from '../alerting/evaluator.js';
+import { runGroupingEngine } from '../discovery/groupingEngine.js';
 
 /** Load pipeline config from app_config, falling back to defaults. */
 async function loadPipelineConfig(db: Knex): Promise<{
@@ -111,6 +112,13 @@ export async function runPipeline(
       } catch (err) {
         logger.error(`[${localTimestamp()}] Alert evaluation failed for window ${w.id}:`, err);
       }
+    }
+
+    // 5. Run discovery grouping engine (non-critical, checks enabled internally)
+    try {
+      await runGroupingEngine(db);
+    } catch (err) {
+      logger.warn(`[${localTimestamp()}] Discovery grouping engine failed:`, err);
     }
 
     const elapsed = Date.now() - start;
