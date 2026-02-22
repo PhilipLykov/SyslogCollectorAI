@@ -18,7 +18,11 @@ export const DEFAULT_W_META = 0.7;
  * the expensive regex scan happens once across the events table, not once per
  * (event x window x criterion) combination inside the LATERAL.
  */
-export async function recalcEffectiveScores(db: ReturnType<typeof getDb>, systemId: string | null): Promise<number> {
+export async function recalcEffectiveScores(
+  db: ReturnType<typeof getDb>,
+  systemId: string | null,
+  options?: { skipNormalBehavior?: boolean },
+): Promise<number> {
   let windowDays = 7;
   try {
     const cfgRow = await db('app_config').where({ key: 'dashboard_config' }).first('value');
@@ -31,16 +35,37 @@ export async function recalcEffectiveScores(db: ReturnType<typeof getDb>, system
 
   const since = new Date(Date.now() - windowDays * 86_400_000).toISOString();
 
+  const skip = options?.skipNormalBehavior ?? false;
   const systemFilter = systemId ? 'AND eff.system_id = ?' : '';
   const normalSystemFilter = systemId ? 'AND e.system_id = ?' : '';
   const params: unknown[] = [];
 
-  // Build parameter list based on whether systemId is provided
-  // CTE normal_ids: params[0] = since, optionally params[1] = systemId
-  params.push(since);
-  if (systemId) params.push(systemId);
+  // ── Build the SQL depending on whether we skip normal-behavior filtering ──
+  // When skipNormalBehavior is true (e.g., ack/unack) we omit the expensive
+  // normal_ids regex CTE because event_scores already reflect normal behavior
+  // filtering from the scoring pipeline.
 
-  // CTE window_max: params[next] = since, optionally params[next+1] = systemId
+  let normalIdsCte = '';
+  let normalExclusion = '';
+  if (!skip) {
+    normalIdsCte = `
+      normal_ids AS (
+        SELECT DISTINCT e.id
+        FROM events e
+        JOIN normal_behavior_templates nbt ON nbt.enabled = true
+          AND (nbt.system_id IS NULL OR nbt.system_id = e.system_id)
+          AND e.message ~* nbt.pattern
+          AND (nbt.host_pattern IS NULL OR e.host ~* nbt.host_pattern)
+          AND (nbt.program_pattern IS NULL OR e.program ~* nbt.program_pattern)
+        WHERE e.timestamp >= ?
+          ${normalSystemFilter}
+      ),`;
+    normalExclusion = 'AND e.id NOT IN (SELECT id FROM normal_ids)';
+    params.push(since);
+    if (systemId) params.push(systemId);
+  }
+
+  // window_max CTE params
   params.push(since);
   if (systemId) params.push(systemId);
 
@@ -48,17 +73,7 @@ export async function recalcEffectiveScores(db: ReturnType<typeof getDb>, system
   params.push(DEFAULT_W_META, 1 - DEFAULT_W_META);
 
   const result = await db.raw(`
-    WITH normal_ids AS (
-      SELECT DISTINCT e.id
-      FROM events e
-      JOIN normal_behavior_templates nbt ON nbt.enabled = true
-        AND (nbt.system_id IS NULL OR nbt.system_id = e.system_id)
-        AND e.message ~* nbt.pattern
-        AND (nbt.host_pattern IS NULL OR e.host ~* nbt.host_pattern)
-        AND (nbt.program_pattern IS NULL OR e.program ~* nbt.program_pattern)
-      WHERE e.timestamp >= ?
-        ${normalSystemFilter}
-    ),
+    WITH ${normalIdsCte}
     window_max AS (
       SELECT
         eff.window_id,
@@ -81,7 +96,7 @@ export async function recalcEffectiveScores(db: ReturnType<typeof getDb>, system
             AND e.acknowledged_at IS NULL
             AND es.criterion_id = eff.criterion_id
             AND es.score_type = 'event'
-            AND e.id NOT IN (SELECT id FROM normal_ids)
+            ${normalExclusion}
           UNION ALL
           -- ES events path (metadata tracked in es_event_metadata)
           SELECT es.score
@@ -122,26 +137,44 @@ export async function recalcEffectiveScores(db: ReturnType<typeof getDb>, system
       .first();
 
     if (latestWindow) {
-      const liveMaxRows = await db.raw(`
-        SELECT es.criterion_id, MAX(es.score) AS max_score
-        FROM event_scores es
-        JOIN events e ON e.id::text = es.event_id
-        WHERE e.system_id = ?
-          AND e.timestamp >= ?
-          AND e.acknowledged_at IS NULL
-          AND es.score_type = 'event'
-          AND e.id NOT IN (
-            SELECT DISTINCT en.id FROM events en
-            JOIN normal_behavior_templates nbt ON nbt.enabled = true
-              AND (nbt.system_id IS NULL OR nbt.system_id = en.system_id)
-              AND en.message ~* nbt.pattern
-              AND (nbt.host_pattern IS NULL OR en.host ~* nbt.host_pattern)
-              AND (nbt.program_pattern IS NULL OR en.program ~* nbt.program_pattern)
-            WHERE en.timestamp >= ?
-              AND en.system_id = ?
-          )
-        GROUP BY es.criterion_id
-      `, [systemId, since, since, systemId]);
+      let seedSql: string;
+      let seedParams: unknown[];
+
+      if (!skip) {
+        seedSql = `
+          SELECT es.criterion_id, MAX(es.score) AS max_score
+          FROM event_scores es
+          JOIN events e ON e.id::text = es.event_id
+          WHERE e.system_id = ?
+            AND e.timestamp >= ?
+            AND e.acknowledged_at IS NULL
+            AND es.score_type = 'event'
+            AND e.id NOT IN (
+              SELECT DISTINCT en.id FROM events en
+              JOIN normal_behavior_templates nbt ON nbt.enabled = true
+                AND (nbt.system_id IS NULL OR nbt.system_id = en.system_id)
+                AND en.message ~* nbt.pattern
+                AND (nbt.host_pattern IS NULL OR en.host ~* nbt.host_pattern)
+                AND (nbt.program_pattern IS NULL OR en.program ~* nbt.program_pattern)
+              WHERE en.timestamp >= ?
+                AND en.system_id = ?
+            )
+          GROUP BY es.criterion_id`;
+        seedParams = [systemId, since, since, systemId];
+      } else {
+        seedSql = `
+          SELECT es.criterion_id, MAX(es.score) AS max_score
+          FROM event_scores es
+          JOIN events e ON e.id::text = es.event_id
+          WHERE e.system_id = ?
+            AND e.timestamp >= ?
+            AND e.acknowledged_at IS NULL
+            AND es.score_type = 'event'
+          GROUP BY es.criterion_id`;
+        seedParams = [systemId, since];
+      }
+
+      const liveMaxRows = await db.raw(seedSql, seedParams);
 
       const maxMap = new Map<number, number>();
       for (const row of liveMaxRows.rows ?? []) {
