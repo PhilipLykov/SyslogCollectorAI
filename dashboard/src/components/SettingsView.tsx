@@ -611,10 +611,10 @@ export function SettingsView({ onAuthError, currentUser, initialTab, onTabConsum
                         </p>
                         <p>Examples:</p>
                         <ul>
-                          <li><code>{'{"host": ".*"}'}</code> — matches all hosts (catch-all)</li>
-                          <li><code>{'{"source_ip": "^192\\\\.168\\\\.32\\\\."}'}</code> — matches events from 192.168.32.* subnet</li>
-                          <li><code>{'{"host": "^web-\\\\d+"}'}</code> — matches hosts like web-01, web-02</li>
-                          <li><code>{'{"service": "nginx", "host": "prod-.*"}'}</code> — matches nginx on prod servers</li>
+                          <li><code>{'host: ".*"'}</code> — matches all hosts (catch-all)</li>
+                          <li><code>{'source_ip: "^192\\.168\\.32\\."'}</code> — matches events from 192.168.32.* subnet</li>
+                          <li><code>{'host: "^web-\\d+"'}</code> — matches hosts like web-01, web-02</li>
+                          <li><code>{'service: "nginx" AND host: "prod-.*"'}</code> — matches nginx on prod servers</li>
                         </ul>
                         <p>
                           <strong>Priority</strong> controls evaluation order (lower = evaluated first).
