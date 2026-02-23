@@ -618,7 +618,9 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
             maxEvents: reevalMaxEvents,
           });
 
-          try { await recalcEffectiveScores(db, systemId); } catch { /* ignore */ }
+          try { await recalcEffectiveScores(db, systemId); } catch (err: any) {
+            app.log.warn(`[${localTimestamp()}] Recalc after re-evaluate failed: ${err.message}`);
+          }
 
           const newScores: Record<string, { effective: number; meta: number; max_event: number }> = {};
           const effRows = await db('effective_scores').where({ window_id: windowId, system_id: systemId });

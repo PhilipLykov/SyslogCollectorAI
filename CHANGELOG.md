@@ -33,6 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Finding Dedup Cleanup**: Removed unused `criterionFilter` parameter from `TfIdfSimilarity.bestMatch()`, removed redundant case-insensitive regex flags after `.toLowerCase()`
 
 ### Fixed
+- **Stale Scores After Rapid Ack Operations**: Background `recalcEffectiveScores` used a skip-based debounce guard — if a second ack committed DB changes while the first recalc was running, the PostgreSQL snapshot missed those changes, leaving effective scores stale until the next pipeline run (up to 15 minutes). Replaced with a coalescing pattern (`runCoalescedRecalc`): when a recalc is already running, the new request is queued and fires once the current one finishes, ensuring the latest DB state is always reflected
+- **Concurrent Event Group Acknowledgement**: Clicking "Ack" on one event group blocked all other ack buttons until completion. Replaced the single-key mutex (`ackingGroupKey`) with a `useRef<Set<string>>` pattern that tracks per-group in-flight state independently, allowing multiple groups to be acknowledged concurrently
+- **Silent Error Suppression in Re-evaluate**: `recalcEffectiveScores` failures after manual re-evaluation were silently swallowed. Now logged with timestamp and error message for diagnosability
 - **CRITICAL: Discovery Routes Compilation Error**: `PERMISSIONS.SETTINGS_VIEW` and `PERMISSIONS.SETTINGS_MANAGE` constants did not exist in the permissions module, preventing TypeScript compilation. Changed to `PERMISSIONS.SYSTEMS_VIEW` / `PERMISSIONS.SYSTEMS_MANAGE`
 - **Discovery Accept Hash Mismatch**: `computeNormalizedHash` in event replay was missing `facility` and `service` fields, producing different hashes than normal ingestion and defeating deduplication
 - **Discovery Accept/Merge Race Condition**: Accept and merge endpoints now use `db.transaction()` to prevent concurrent requests from creating duplicate systems or log sources

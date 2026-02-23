@@ -103,7 +103,8 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
   const [detailEventNotFound, setDetailEventNotFound] = useState(false);
 
   // ── Per-group Ack state ──────────────────────────────────
-  const [ackingGroupKey, setAckingGroupKey] = useState<string | null>(null);
+  const ackingGroupKeys = useRef(new Set<string>());
+  const [, forceAckRender] = useState(0);
   const [showAcknowledged, setShowAcknowledged] = useState(false);
 
   // ── Finding proof events (Show Events) ───────────────────
@@ -764,11 +765,11 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
 
   // ── Per-group Ack handler ───────────────────────────────
   const handleAckGroup = useCallback(async (groupKey: string) => {
-    if (ackingGroupKey) return;
-    setAckingGroupKey(groupKey);
+    if (ackingGroupKeys.current.has(groupKey)) return;
+    ackingGroupKeys.current.add(groupKey);
+    forceAckRender((n) => n + 1);
     try {
       await acknowledgeEventGroup({ system_id: system.id, group_key: groupKey });
-      // Remove the group from the list or mark it as acknowledged
       if (!showAcknowledged) {
         setCriterionGroups((prev) => prev.filter((g) => g.group_key !== groupKey));
       } else {
@@ -776,7 +777,6 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
           prev.map((g) => (g.group_key === groupKey ? { ...g, acknowledged: true } : g)),
         );
       }
-      // Refresh scores and findings
       onRefreshSystem?.();
       loadFindings();
     } catch (err: unknown) {
@@ -784,9 +784,10 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
       if (msg.includes('Authentication')) { onAuthErrorRef.current(); return; }
       alert(`Ack failed: ${msg}`);
     } finally {
-      setAckingGroupKey(null);
+      ackingGroupKeys.current.delete(groupKey);
+      forceAckRender((n) => n + 1);
     }
-  }, [ackingGroupKey, system.id, showAcknowledged, onRefreshSystem, loadFindings]);
+  }, [system.id, showAcknowledged, onRefreshSystem, loadFindings]);
 
   // ── Show Events for a finding (fetch by key_event_ids) ──
   const handleShowFindingEvents = useCallback(async (findingId: string, keyEventIds: string[]) => {
@@ -1132,10 +1133,10 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
                                     <button
                                       className="btn btn-xs btn-ack-group"
                                       onClick={(ev) => { ev.stopPropagation(); handleAckGroup(grp.group_key); }}
-                                      disabled={ackingGroupKey === grp.group_key}
+                                      disabled={ackingGroupKeys.current.has(grp.group_key)}
                                       title="Acknowledge this event group — removes from score calculation"
                                     >
-                                      {ackingGroupKey === grp.group_key ? '…' : 'Ack'}
+                                      {ackingGroupKeys.current.has(grp.group_key) ? '…' : 'Ack'}
                                     </button>
                                     <button
                                       className={`btn btn-xs ${copiedId === grp.group_key ? 'btn-success-outline' : 'btn-outline'}`}
