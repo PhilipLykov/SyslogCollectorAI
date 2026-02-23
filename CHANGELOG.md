@@ -5,7 +5,7 @@ All notable changes to LogSentinel AI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.8.8-beta] - 2026-02-22
+## [0.8.8-beta] - 2026-02-23
 
 ### Added
 - **System Auto-Discovery**: Automatically detects new log sources from unmatched incoming events and suggests new monitored systems
@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Existing system affinity detection prevents duplicate suggestions when a log source already covers the pattern
   - Fully configurable via UI: enable/disable globally, toggle group-by-host / group-by-IP / split-by-program, set buffer TTL, auto-accept mode
   - Transactional accept/merge with status guards prevent duplicate processing
+  - Catch-all matched events are also buffered for discovery so systems with universal sources still trigger suggestions
+  - LLM-generated system descriptions on accept/merge based on detected programs
+  - System navigation link after accepting a suggestion
 - **DST-Aware Timezone Support (IANA)**: Monitored systems can now specify an IANA timezone name (e.g., `Europe/Chisinau`) instead of a fixed UTC offset
   - Automatically computes the correct UTC offset at each event's timestamp, including DST transitions
   - Three-mode timezone picker in the system form: None / Timezone (DST-aware) / Fixed UTC offset
@@ -26,22 +29,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Enhanced AI Finding Deduplication**: Two-layer approach to prevent duplicate findings
   - Text normalization now strips LLM event references (`(events [1], [2])`, `[N]`) and all isolated numbers before computing similarity
   - New "DUPLICATE PREVENTION" section in the LLM meta-analysis system prompt explicitly instructs the model to compare against existing open findings and avoid creating duplicates when the root cause is the same
+- **Cross-Batch Fragment Buffer**: Bounded in-memory buffer with TTL and LRU eviction for reassembling multiline syslog messages that arrive across different ingestion batches
+- **Orphan Fragment Detection**: Scoring pipeline now detects and skips short SQL-like, tab-prefixed, or process-info fragments that escaped multiline reassembly, saving LLM tokens
 
 ### Changed
 - **Discovery Buffer in Ingest Pipeline**: Unmatched events are now buffered (fire-and-forget) for auto-discovery instead of being silently discarded. Discovery can be disabled in settings
 - **Grouping Engine in Pipeline Orchestrator**: The discovery grouping engine runs as a non-critical step after alert evaluation in each pipeline cycle, respecting the enabled flag
 - **Finding Dedup Cleanup**: Removed unused `criterionFilter` parameter from `TfIdfSimilarity.bestMatch()`, removed redundant case-insensitive regex flags after `.toLowerCase()`
+- **Async Ack/Unack Responses**: Event acknowledge and unacknowledge endpoints now return immediately while background score recalculation continues asynchronously
+- **Async Mark as OK**: The "Mark as Normal Behavior" endpoint returns immediately while retroactive re-scoring runs in the background
+- **Wider Drill-Down Layout**: Criterion drill-down panel widened to accommodate Copy and Ack buttons on a single line
+- **Discovery Panel UI Redesign**: Unified card-based design for pending suggestions, consistent with the rest of the Settings UI. Programs list hidden when "Split by program" is disabled
+- **Dashboard Score Query**: Replaced `GROUP BY` / `MAX()` aggregation with `DISTINCT ON` to ensure effective_value, meta_score, and max_event_score come from the same window
+- **Selector Help Text**: Examples now use the same single-backslash display format shown in the Log Sources table
+
+### Performance
+- **Global recalcEffectiveScores Mutex**: Promise-based serialization prevents concurrent CTE+UPDATE executions that previously caused PostgreSQL deadlocks
+- **Supplementary Live-Event Score Update**: After the main CTE, a targeted `UPDATE` refreshes the latest window's `max_event_score` from live unacknowledged events, ensuring recent high-score events appear immediately
+- **Optimized Re-evaluation**: Removed redundant intermediate `recalcEffectiveScores` call and optimized `key_event_ids` backfill to run only when needed
+- **Source Cache Invalidation**: Auto-discovery accept/merge now invalidates the in-memory log source cache so new sources match incoming events immediately without restart
 
 ### Fixed
-- **Stale Scores After Rapid Ack Operations**: Background `recalcEffectiveScores` used a skip-based debounce guard — if a second ack committed DB changes while the first recalc was running, the PostgreSQL snapshot missed those changes, leaving effective scores stale until the next pipeline run (up to 15 minutes). Replaced with a coalescing pattern (`runCoalescedRecalc`): when a recalc is already running, the new request is queued and fires once the current one finishes, ensuring the latest DB state is always reflected
-- **Concurrent Event Group Acknowledgement**: Clicking "Ack" on one event group blocked all other ack buttons until completion. Replaced the single-key mutex (`ackingGroupKey`) with a `useRef<Set<string>>` pattern that tracks per-group in-flight state independently, allowing multiple groups to be acknowledged concurrently
-- **Silent Error Suppression in Re-evaluate**: `recalcEffectiveScores` failures after manual re-evaluation were silently swallowed. Now logged with timestamp and error message for diagnosability
-- **CRITICAL: Discovery Routes Compilation Error**: `PERMISSIONS.SETTINGS_VIEW` and `PERMISSIONS.SETTINGS_MANAGE` constants did not exist in the permissions module, preventing TypeScript compilation. Changed to `PERMISSIONS.SYSTEMS_VIEW` / `PERMISSIONS.SYSTEMS_MANAGE`
-- **Discovery Accept Hash Mismatch**: `computeNormalizedHash` in event replay was missing `facility` and `service` fields, producing different hashes than normal ingestion and defeating deduplication
-- **Discovery Accept/Merge Race Condition**: Accept and merge endpoints now use `db.transaction()` to prevent concurrent requests from creating duplicate systems or log sources
-- **Discovery Wildcard Fallback**: Removed unsafe wildcard fallback `{ host: '.*' }` that could match all events if a suggestion had no identifying patterns. Now returns 400 error instead
-- **Discovery Double-Processing Guard**: Accept, merge, and dismiss endpoints now check `status !== 'pending'` and return 409 Conflict if already processed
-- **Discovery Panel Error Handling**: Standardized error extraction to `instanceof Error` pattern, added `setError('')` clearing before action handlers, fixed silent error swallowing in `loadSuggestions`
+- **Stale Dashboard Scores After Re-evaluation**: Old meta-scores from prior windows persisted and inflated dashboard MAX aggregations. Re-evaluation now zeros out meta_scores on all prior windows, and the dashboard query uses `DISTINCT ON` to fetch consistent score components from the same window
+- **IT Security Score Stuck at 0 Despite High Events**: `recalcEffectiveScores` didn't update `max_event_score` for recent events arriving after the window's `to_ts`. A supplementary UPDATE now proactively refreshes the latest window from live event scores
+- **PostgreSQL Deadlocks in Score Recalculation**: Concurrent `recalcEffectiveScores` calls from parallel ack operations and pipeline runs caused lock contention. A global promise mutex now serializes all invocations
+- **Multiline PostgreSQL Log Fragmentation**: Orphan `[N-M]` continuation lines without a matching head were emitted as separate events. They are now consolidated into a single merged event
+- **Stale Scores After Rapid Ack Operations**: Replaced skip-based debounce guard with a coalescing pattern — when a recalc is already running, the new request queues and fires once the current one finishes
+- **Concurrent Event Group Acknowledgement**: Replaced single-key mutex (`ackingGroupKey`) with `useRef<Set<string>>` pattern for per-group independent in-flight tracking
+- **Silent Error Suppression in Re-evaluate**: `recalcEffectiveScores` failures now logged with timestamp and error message
+- **Auto-Created Log Source Not Matching Events**: Discovery accept/merge now calls `invalidateSourceCache()` so newly created sources are recognized by the ingest pipeline immediately
+- **Finding key_event_ids Backfill**: Existing findings with `[N]`-style references now have their `key_event_ids` populated via a migration backfill
+- **CRITICAL: Discovery Routes Compilation Error**: Changed non-existent `PERMISSIONS.SETTINGS_VIEW/MANAGE` to `PERMISSIONS.SYSTEMS_VIEW/MANAGE`
+- **Discovery Accept Hash Mismatch**: `computeNormalizedHash` in event replay now includes `facility` and `service` fields
+- **Discovery Accept/Merge Race Condition**: Endpoints now use `db.transaction()` to prevent duplicate processing
+- **Discovery Wildcard Fallback**: Removed unsafe `{ host: '.*' }` fallback; returns 400 error instead
+- **Discovery Double-Processing Guard**: Endpoints check `status !== 'pending'` and return 409 Conflict if already processed
+- **Discovery Panel Error Handling**: Standardized error extraction, added `setError('')` clearing, fixed silent error swallowing
 
 ## [0.8.7-beta] - 2026-02-20
 
