@@ -5,6 +5,7 @@ import { requireAuth } from '../../middleware/auth.js';
 import { PERMISSIONS } from '../../middleware/permissions.js';
 import { CRITERIA } from '../../types/index.js';
 import { localTimestamp } from '../../config/index.js';
+import { logger } from '../../config/logger.js';
 import { writeAuditLog, getActorName } from '../../middleware/audit.js';
 import { getEventSource, getDefaultEventSource } from '../../services/eventSourceFactory.js';
 import { OpenAiAdapter } from '../llm/adapter.js';
@@ -440,7 +441,7 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
         const systems = await db('monitored_systems').select('id', 'name');
         reply.raw.write(`data: ${JSON.stringify({ type: 'init', systems })}\n\n`);
       } catch (err) {
-        app.log.error(`[${localTimestamp()}] SSE init error: ${err}`);
+        logger.error(`[${localTimestamp()}] SSE init error: ${err}`);
       }
 
       // Poll for updates every 15s
@@ -490,7 +491,7 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
             intervalCleared = true;
             clearInterval(interval);
           } else {
-            app.log.error(`[${localTimestamp()}] SSE poll error: ${err}`);
+            logger.error(`[${localTimestamp()}] SSE poll error: ${err}`);
           }
         }
       }, 15_000);
@@ -601,12 +602,12 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
               systemId,
               normalizeSql,
             });
-            app.log.info(
+            logger.warn(
               `[${localTimestamp()}] Re-evaluate [${systemName}]: scoring done in ${Date.now() - t0}ms ` +
               `(scored=${scoringResult.scored}, templates=${scoringResult.templates})`,
             );
           } catch (err: any) {
-            app.log.warn(`[${localTimestamp()}] Pre-reeval per-event scoring failed: ${err.message}`);
+            logger.warn(`[${localTimestamp()}] Pre-reeval per-event scoring failed: ${err.message}`);
           }
 
           const t1 = Date.now();
@@ -624,7 +625,7 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
             resetContext: true,
             maxEvents: reevalMaxEvents,
           });
-          app.log.info(`[${localTimestamp()}] Re-evaluate [${systemName}]: meta-analysis done in ${Date.now() - t1}ms`);
+          logger.warn(`[${localTimestamp()}] Re-evaluate [${systemName}]: meta-analysis done in ${Date.now() - t1}ms`);
 
           const t2 = Date.now();
           try {
@@ -640,13 +641,13 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
                 effective_value: db.raw(`? * max_event_score`, [1 - DEFAULT_W_META]),
               });
           } catch (err: any) {
-            app.log.warn(`[${localTimestamp()}] Zeroing old meta_scores failed: ${err.message}`);
+            logger.warn(`[${localTimestamp()}] Zeroing old meta_scores failed: ${err.message}`);
           }
 
           try { await recalcEffectiveScores(db, systemId); } catch (err: any) {
-            app.log.warn(`[${localTimestamp()}] Recalc after re-evaluate failed: ${err.message}`);
+            logger.warn(`[${localTimestamp()}] Recalc after re-evaluate failed: ${err.message}`);
           }
-          app.log.info(
+          logger.warn(
             `[${localTimestamp()}] Re-evaluate [${systemName}]: recalc done in ${Date.now() - t2}ms ` +
             `(total=${Date.now() - t0}ms)`,
           );
@@ -686,7 +687,7 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
             },
           });
         } catch (err: any) {
-          app.log.error(`[${localTimestamp()}] Re-evaluate background job failed: ${err.message}`);
+          logger.error(`[${localTimestamp()}] Re-evaluate background job failed: ${err.message}`);
           reEvalJobs.set(jobId, {
             status: 'error',
             startedAt: reEvalJobs.get(jobId)!.startedAt,
