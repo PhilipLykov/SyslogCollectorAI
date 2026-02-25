@@ -12,6 +12,22 @@ import {
   type MonitoredSystem,
 } from '../api';
 
+function formatEuDate(iso: string): string {
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = d.getFullYear();
+    const hours = String(d.getHours()).padStart(2, '0');
+    const minutes = String(d.getMinutes()).padStart(2, '0');
+    const seconds = String(d.getSeconds()).padStart(2, '0');
+    return `${day}-${month}-${year} ${hours}:${minutes}:${seconds}`;
+  } catch {
+    return iso;
+  }
+}
+
 interface DiscoveryPanelProps {
   onAuthError: () => void;
   onNavigateToSystem?: (systemId: string) => void;
@@ -31,6 +47,9 @@ export function DiscoveryPanel({ onAuthError, onNavigateToSystem }: DiscoveryPan
   const [mergeTargets, setMergeTargets] = useState<Record<string, string>>({});
   const [ignoreText, setIgnoreText] = useState('');
   const [acceptedSystem, setAcceptedSystem] = useState<{ id: string; name: string } | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [batchBusy, setBatchBusy] = useState(false);
+  const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null);
 
   const loadConfig = useCallback(async () => {
     try {
@@ -148,6 +167,85 @@ export function DiscoveryPanel({ onAuthError, onNavigateToSystem }: DiscoveryPan
       else next.add(id);
       return next;
     });
+  };
+
+  const pendingSuggestions = suggestions.filter(s => s.status === 'pending');
+
+  const toggleSelect = (id: string) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    const pendingIds = pendingSuggestions.map(s => s.id);
+    const allSelected = pendingIds.length > 0 && pendingIds.every(id => selected.has(id));
+    if (allSelected) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(pendingIds));
+    }
+  };
+
+  const selectedPending = pendingSuggestions.filter(s => selected.has(s.id));
+
+  const handleBatchAccept = async () => {
+    if (selectedPending.length === 0) return;
+    setBatchBusy(true);
+    setBatchProgress({ done: 0, total: selectedPending.length });
+    setError('');
+    let created = 0;
+    let failed = 0;
+    for (const s of selectedPending) {
+      try {
+        const name = editingNames[s.id] || s.suggested_name;
+        await acceptDiscoverySuggestion(s.id, { name, replay_events: false });
+        created++;
+      } catch {
+        failed++;
+      }
+      setBatchProgress({ done: created + failed, total: selectedPending.length });
+    }
+    setBatchBusy(false);
+    setBatchProgress(null);
+    setSelected(new Set());
+    if (failed === 0) {
+      setSuccess(`${created} system${created !== 1 ? 's' : ''} created successfully.`);
+    } else {
+      setSuccess(`${created} created, ${failed} failed.`);
+    }
+    await loadSuggestions();
+    await loadSystems();
+  };
+
+  const handleBatchDismiss = async (duration: '24h' | '7d' | 'forever') => {
+    if (selectedPending.length === 0) return;
+    setBatchBusy(true);
+    setBatchProgress({ done: 0, total: selectedPending.length });
+    setError('');
+    let dismissed = 0;
+    let failed = 0;
+    for (const s of selectedPending) {
+      try {
+        await dismissDiscoverySuggestion(s.id, duration);
+        dismissed++;
+      } catch {
+        failed++;
+      }
+      setBatchProgress({ done: dismissed + failed, total: selectedPending.length });
+    }
+    setBatchBusy(false);
+    setBatchProgress(null);
+    setSelected(new Set());
+    if (failed === 0) {
+      setSuccess(`${dismissed} suggestion${dismissed !== 1 ? 's' : ''} dismissed.`);
+    } else {
+      setSuccess(`${dismissed} dismissed, ${failed} failed.`);
+    }
+    await loadSuggestions();
   };
 
   if (loading) return <div className="loading"><div className="spinner" /> Loading discovery settings...</div>;
@@ -299,7 +397,7 @@ export function DiscoveryPanel({ onAuthError, onNavigateToSystem }: DiscoveryPan
               <button
                 key={st}
                 className={`btn btn-sm${statusFilter === st ? '' : ' btn-outline'}`}
-                onClick={() => setStatusFilter(st)}
+                onClick={() => { setStatusFilter(st); setSelected(new Set()); }}
               >
                 {st.charAt(0).toUpperCase() + st.slice(1)}
               </button>
@@ -308,6 +406,57 @@ export function DiscoveryPanel({ onAuthError, onNavigateToSystem }: DiscoveryPan
           <button className="btn btn-sm btn-outline" onClick={loadSuggestions}>Refresh</button>
         </div>
 
+        {selectedPending.length > 0 && (
+          <div className="discovery-batch-bar">
+            <label className="discovery-select-all">
+              <input
+                type="checkbox"
+                checked={pendingSuggestions.length > 0 && pendingSuggestions.every(s => selected.has(s.id))}
+                onChange={toggleSelectAll}
+                disabled={batchBusy}
+              />
+              {selectedPending.length === pendingSuggestions.length
+                ? 'All selected'
+                : `${selectedPending.length} of ${pendingSuggestions.length} selected`}
+            </label>
+            <div className="discovery-batch-actions">
+              <button
+                className="btn btn-sm"
+                onClick={handleBatchAccept}
+                disabled={batchBusy}
+              >
+                {batchBusy && batchProgress ? `Accepting ${batchProgress.done}/${batchProgress.total}...` : `Accept ${selectedPending.length}`}
+              </button>
+              <select
+                className="discovery-dismiss-select"
+                onChange={e => { if (e.target.value) handleBatchDismiss(e.target.value as '24h' | '7d' | 'forever'); e.target.value = ''; }}
+                defaultValue=""
+                disabled={batchBusy}
+              >
+                <option value="" disabled>Dismiss {selectedPending.length}...</option>
+                <option value="24h">24 hours</option>
+                <option value="7d">7 days</option>
+                <option value="forever">Forever</option>
+              </select>
+              <button
+                className="btn btn-sm btn-outline"
+                onClick={() => setSelected(new Set())}
+                disabled={batchBusy}
+              >
+                Clear
+              </button>
+            </div>
+            {batchProgress && (
+              <div className="discovery-batch-progress">
+                <div
+                  className="discovery-batch-progress-fill"
+                  style={{ width: `${(batchProgress.done / batchProgress.total) * 100}%` }}
+                />
+              </div>
+            )}
+          </div>
+        )}
+
         {suggestions.length === 0 ? (
           <div className="discovery-empty">
             {statusFilter === 'pending'
@@ -315,114 +464,141 @@ export function DiscoveryPanel({ onAuthError, onNavigateToSystem }: DiscoveryPan
               : `No ${statusFilter} suggestions.`}
           </div>
         ) : (
-          <>
-            <div className="table-responsive">
-              <table className="data-table discovery-table">
-                <thead>
-                  <tr>
-                    <th>Suggested Name</th>
-                    <th>Host / IP</th>
-                    <th>{splitByProgram ? 'Programs' : 'Programs (observed)'}</th>
-                    <th>Events</th>
-                    <th>First Seen</th>
-                    <th>Last Seen</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {suggestions.map(s => (
-                    <tr key={s.id}>
-                      <td>
-                        {statusFilter === 'pending' ? (
-                          <input
-                            type="text"
-                            className="discovery-name-input"
-                            value={editingNames[s.id] ?? s.suggested_name}
-                            onChange={e => setEditingNames(prev => ({ ...prev, [s.id]: e.target.value }))}
-                          />
-                        ) : (
-                          <span>{s.suggested_name}</span>
-                        )}
-                      </td>
-                      <td>
-                        {s.host_pattern && <span title="Hostname">{s.host_pattern}</span>}
-                        {s.host_pattern && s.ip_pattern && ' / '}
-                        {s.ip_pattern && <span className="discovery-ip" title="Source IP">{s.ip_pattern}</span>}
-                      </td>
-                      <td className="discovery-programs-cell">
-                        {(s.program_patterns ?? []).length > 0 ? (
-                          <span className={splitByProgram ? '' : 'discovery-programs-info'}>
-                            {(s.program_patterns ?? []).join(', ')}
-                            {!splitByProgram && (
-                              <span className="discovery-programs-hint">observed on this host</span>
-                            )}
-                          </span>
-                        ) : '\u2014'}
-                      </td>
-                      <td>
-                        {s.event_count}
-                        {s.sample_messages?.length > 0 && (
-                          <button
-                            className="btn btn-sm btn-outline discovery-samples-btn"
-                            onClick={() => toggleSamples(s.id)}
-                          >
-                            {expandedSamples.has(s.id) ? 'Hide' : 'Samples'}
-                          </button>
-                        )}
-                      </td>
-                      <td className="discovery-date-cell">
-                        {s.first_seen_at ? new Date(s.first_seen_at).toLocaleString() : '\u2014'}
-                      </td>
-                      <td className="discovery-date-cell">
-                        {s.last_seen_at ? new Date(s.last_seen_at).toLocaleString() : '\u2014'}
-                      </td>
-                      <td>
-                        {s.status === 'pending' && (
-                          <div className="discovery-actions">
-                            <button className="btn btn-sm" onClick={() => handleAccept(s)}>Accept</button>
-                            <select
-                              className="discovery-merge-select"
-                              value={mergeTargets[s.id] ?? ''}
-                              onChange={e => setMergeTargets(prev => ({ ...prev, [s.id]: e.target.value }))}
-                            >
-                              <option value="">Merge into...</option>
-                              {systems.map(sys => (
-                                <option key={sys.id} value={sys.id}>{sys.name}</option>
-                              ))}
-                            </select>
-                            {mergeTargets[s.id] && (
-                              <button className="btn btn-sm btn-outline" onClick={() => handleMerge(s)}>Merge</button>
-                            )}
-                            <select
-                              className="discovery-dismiss-select"
-                              onChange={e => { if (e.target.value) handleDismiss(s, e.target.value as '24h' | '7d' | 'forever'); e.target.value = ''; }}
-                              defaultValue=""
-                            >
-                              <option value="" disabled>Dismiss...</option>
-                              <option value="24h">24 hours</option>
-                              <option value="7d">7 days</option>
-                              <option value="forever">Forever</option>
-                            </select>
-                          </div>
-                        )}
-                        {s.status === 'accepted' && <span className="badge badge-success">Accepted</span>}
-                        {s.status === 'dismissed' && <span className="badge badge-muted">Dismissed</span>}
-                        {s.status === 'merged' && <span className="badge badge-info">Merged</span>}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            {suggestions.map(s => expandedSamples.has(s.id) && s.sample_messages?.length > 0 && (
-              <div key={`samples-${s.id}`} className="discovery-samples-panel">
-                <strong>{s.suggested_name} &mdash; Sample Messages:</strong>
-                {s.sample_messages.map((msg, i) => (
-                  <pre key={i} className="discovery-sample-msg">{msg}</pre>
-                ))}
+          <div className="discovery-cards">
+            {pendingSuggestions.length > 0 && selectedPending.length === 0 && (
+              <label className="discovery-select-all-hint">
+                <input
+                  type="checkbox"
+                  checked={false}
+                  onChange={toggleSelectAll}
+                />
+                Select all to perform batch actions
+              </label>
+            )}
+            {suggestions.map(s => (
+              <div
+                key={s.id}
+                className={
+                  `discovery-card`
+                  + (s.status !== 'pending' ? ' discovery-card--resolved' : '')
+                  + (selected.has(s.id) ? ' discovery-card--selected' : '')
+                }
+              >
+                <div className="discovery-card-header">
+                  <div className="discovery-card-name">
+                    {s.status === 'pending' && (
+                      <input
+                        type="checkbox"
+                        className="discovery-card-checkbox"
+                        checked={selected.has(s.id)}
+                        onChange={() => toggleSelect(s.id)}
+                        disabled={batchBusy}
+                      />
+                    )}
+                    {statusFilter === 'pending' ? (
+                      <input
+                        type="text"
+                        className="discovery-name-input"
+                        value={editingNames[s.id] ?? s.suggested_name}
+                        onChange={e => setEditingNames(prev => ({ ...prev, [s.id]: e.target.value }))}
+                      />
+                    ) : (
+                      <span className="discovery-card-title">{s.suggested_name}</span>
+                    )}
+                    {s.status === 'accepted' && <span className="badge badge-success">Accepted</span>}
+                    {s.status === 'dismissed' && <span className="badge badge-muted">Dismissed</span>}
+                    {s.status === 'merged' && <span className="badge badge-info">Merged</span>}
+                  </div>
+                  <div className="discovery-card-event-count">
+                    <span className="discovery-event-badge">{s.event_count.toLocaleString()}</span>
+                    <span className="discovery-event-label">events</span>
+                    {s.sample_messages?.length > 0 && (
+                      <button
+                        className="btn btn-sm btn-outline discovery-samples-btn"
+                        onClick={() => toggleSamples(s.id)}
+                      >
+                        {expandedSamples.has(s.id) ? 'Hide' : 'Samples'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="discovery-card-meta">
+                  <div className="discovery-card-meta-row">
+                    {s.host_pattern && (
+                      <span className="discovery-meta-tag" title="Hostname">
+                        <span className="discovery-meta-label">Host</span>
+                        {s.host_pattern}
+                      </span>
+                    )}
+                    {s.ip_pattern && (
+                      <span className="discovery-meta-tag" title="Source IP">
+                        <span className="discovery-meta-label">IP</span>
+                        {s.ip_pattern}
+                      </span>
+                    )}
+                    {(s.program_patterns ?? []).length > 0 && (
+                      <span className="discovery-meta-tag" title={splitByProgram ? 'Programs' : 'Programs observed on this host'}>
+                        <span className="discovery-meta-label">
+                          {splitByProgram ? 'Program' : 'Observed'}
+                        </span>
+                        {(s.program_patterns ?? []).join(', ')}
+                      </span>
+                    )}
+                  </div>
+                  <div className="discovery-card-dates">
+                    <span title="First seen">
+                      {s.first_seen_at ? formatEuDate(s.first_seen_at) : '\u2014'}
+                    </span>
+                    <span className="discovery-date-separator">{'\u2192'}</span>
+                    <span title="Last seen">
+                      {s.last_seen_at ? formatEuDate(s.last_seen_at) : '\u2014'}
+                    </span>
+                  </div>
+                </div>
+
+                {s.status === 'pending' && (
+                  <div className="discovery-card-actions">
+                    <button className="btn btn-sm" onClick={() => handleAccept(s)}>Accept</button>
+                    <div className="discovery-merge-group">
+                      <select
+                        className="discovery-merge-select"
+                        value={mergeTargets[s.id] ?? ''}
+                        onChange={e => setMergeTargets(prev => ({ ...prev, [s.id]: e.target.value }))}
+                      >
+                        <option value="">Merge into...</option>
+                        {systems.map(sys => (
+                          <option key={sys.id} value={sys.id}>{sys.name}</option>
+                        ))}
+                      </select>
+                      {mergeTargets[s.id] && (
+                        <button className="btn btn-sm btn-outline" onClick={() => handleMerge(s)}>Merge</button>
+                      )}
+                    </div>
+                    <select
+                      className="discovery-dismiss-select"
+                      onChange={e => { if (e.target.value) handleDismiss(s, e.target.value as '24h' | '7d' | 'forever'); e.target.value = ''; }}
+                      defaultValue=""
+                    >
+                      <option value="" disabled>Dismiss...</option>
+                      <option value="24h">24 hours</option>
+                      <option value="7d">7 days</option>
+                      <option value="forever">Forever</option>
+                    </select>
+                  </div>
+                )}
+
+                {expandedSamples.has(s.id) && s.sample_messages?.length > 0 && (
+                  <div className="discovery-samples-inline">
+                    <strong>Sample Messages</strong>
+                    {s.sample_messages.map((msg, i) => (
+                      <pre key={i} className="discovery-sample-msg">{msg}</pre>
+                    ))}
+                  </div>
+                )}
               </div>
             ))}
-          </>
+          </div>
         )}
       </div>
     </div>
