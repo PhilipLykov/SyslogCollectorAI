@@ -510,6 +510,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
       }
       setBulkAckMsg(`${acked} finding${acked !== 1 ? 's' : ''} acknowledged.`);
       setTimeout(() => setBulkAckMsg(''), 4000);
+      onRefreshSystem?.();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('Authentication')) { onAuthErrorRef.current(); return; }
@@ -518,7 +519,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
     } finally {
       setBulkAcking(false);
     }
-  }, [findings, system.name]);
+  }, [findings, system.name, onRefreshSystem]);
 
   // ── Bulk ack: all events ──────────────────────────────
   const handleAckAllEvents = useCallback(async () => {
@@ -532,6 +533,29 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
       const res = await acknowledgeEvents({ system_id: system.id });
       setBulkAckMsg(res.message);
       setTimeout(() => setBulkAckMsg(''), 4000);
+
+      // Refresh criterion groups if a drill-down is open
+      if (selectedCriterion) {
+        const criterion = CRITERIA.find((c) => c.slug === selectedCriterion);
+        if (criterion) {
+          try {
+            const data = await fetchGroupedEventScores(system.id, {
+              criterion_id: criterion.id,
+              limit: 50,
+              min_score: 0.001,
+              show_acknowledged: showAcknowledged,
+            });
+            setCriterionGroups(data.filter((g) => !isNormalBehavior(g.message, g.hosts?.[0], g.program ?? undefined)));
+            setExpandedGroup(null);
+            setExpandedGroupEvents([]);
+          } catch { /* ignore refresh error */ }
+        }
+      }
+
+      // Refresh meta-analysis, findings, and parent scores
+      loadData();
+      loadFindings();
+      onRefreshSystem?.();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('Authentication')) { onAuthErrorRef.current(); return; }
@@ -540,7 +564,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
     } finally {
       setBulkAcking(false);
     }
-  }, [system.id, system.name]);
+  }, [system.id, system.name, selectedCriterion, showAcknowledged, isNormalBehavior, loadData, loadFindings, onRefreshSystem]);
 
   // ── Mark as Normal Behavior ────────────────────────────
   const openMarkOkModal = useCallback(async (
