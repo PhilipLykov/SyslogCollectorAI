@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **Ack All Events/Findings Not Refreshing Scores**: The "Ack All Events" button now refreshes criterion groups, meta-analysis summary, findings list, and parent system scores after completion. "Ack All Findings" now refreshes parent system scores. Both now behave consistently with per-group acknowledgment
 - **Discovery Engine Suggesting Already-Covered Sources**: The grouping engine was creating suggestions for hosts/IPs already matched by specific log sources, and old buffer entries kept regenerating stale suggestions after dismissal
+- **Score Bars Not Updating After Ack/Unack Operations**: All four event acknowledgment/unacknowledgment backend endpoints now run `recalcEffectiveScores` synchronously before sending the HTTP response, eliminating the race condition where the frontend fetched stale scores
+- **Single Finding Ack/Reopen Not Refreshing Scores**: `handleAcknowledge` and `handleReopen` in `DrillDown.tsx` did not call `onRefreshSystem`, so dashboard score bars stayed stale after acknowledging or reopening an individual finding
+- **Audit Log Page Zero Bug**: `fetchAuditLog` used falsy checks for `page` and `limit` params, silently dropping `page=0` or `limit=0` values. Now uses `!== undefined`
+- **Multiline Comment/Code Mismatch**: `isFragment` JSDoc said "comma or semicolon" but only checked for trailing commas; corrected the comment to match the implementation
 
 ## [0.8.9-beta] - 2026-02-25
 

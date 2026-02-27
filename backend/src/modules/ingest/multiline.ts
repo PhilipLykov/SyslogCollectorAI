@@ -371,7 +371,7 @@ function extractTimestampSecond(e: RawEntry): string | null {
  *   4. Elided stack frames ("... N lines matching ...")
  *   5. Short key: value lines (schema: undefined, params: 1)
  *   6. Quoted data-structure elements ('foo' ], "key": value, etc.)
- *   7. Lines ending with trailing comma or semicolon (short)
+ *   7. Lines ending with trailing comma (short)
  *   8. List/diff/separator prefixes (# - + ~ | *)
  */
 function isFragment(message: string): boolean {

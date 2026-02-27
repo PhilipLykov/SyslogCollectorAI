@@ -460,23 +460,24 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
     try {
       const updated = await acknowledgeFinding(findingId);
       setFindings((prev) => prev.map((f) => (f.id === findingId ? updated : f)));
+      onRefreshSystem?.();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('Authentication')) {
         onAuthErrorRef.current();
         return;
       }
-      // Silently swallow — user can try again
     } finally {
       setAckingId(null);
     }
-  }, []);
+  }, [onRefreshSystem]);
 
   const handleReopen = useCallback(async (findingId: string) => {
     setAckingId(findingId);
     try {
       const updated = await reopenFinding(findingId);
       setFindings((prev) => prev.map((f) => (f.id === findingId ? updated : f)));
+      onRefreshSystem?.();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('Authentication')) {
@@ -486,7 +487,7 @@ export function DrillDown({ system, onBack, onAuthError, currentUser, onRefreshS
     } finally {
       setAckingId(null);
     }
-  }, []);
+  }, [onRefreshSystem]);
 
   // ── Bulk ack: all open findings ─────────────────────────
   const [bulkAcking, setBulkAcking] = useState(false);

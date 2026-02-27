@@ -330,8 +330,8 @@ export async function fetchAuditLog(params?: {
   search?: string;
 }): Promise<AuditLogResponse> {
   const qs = new URLSearchParams();
-  if (params?.page) qs.set('page', String(params.page));
-  if (params?.limit) qs.set('limit', String(params.limit));
+  if (params?.page !== undefined) qs.set('page', String(params.page));
+  if (params?.limit !== undefined) qs.set('limit', String(params.limit));
   if (params?.action) qs.set('action', params.action);
   if (params?.resource_type) qs.set('resource_type', params.resource_type);
   if (params?.actor) qs.set('actor', params.actor);
